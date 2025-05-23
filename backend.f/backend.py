@@ -77,8 +77,8 @@ class Config:
         self.HGP2PreInfusion = 0
         self.HGP1ExtractionTime = 20
         self.HGP2ExtractionTime = 20
-        self.tempMainTankSetPoint = 120.0
-        self.tempHeadGP1SetPoint = 91.0
+        self.tempMainTankSetPoint = 110.0
+        self.tempHeadGP1SetPoint = 114.0
         self.tempHeadGP2SetPoint = 92.0
         
         # Additional features
@@ -117,7 +117,42 @@ class RequestHandler(BaseHTTPRequestHandler):
         pass
     
     def do_GET(self):
-        if self.path == '/getdata':
+        if self.path == '/getmainstatus':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            
+            status_data = {
+                "main_temperature": {
+                    "value": config.tempMainTankSetPoint,
+                    "unit": "°C"
+                },
+                "gh1": {
+                    "temperature": {
+                        "value": config.tempHeadGP1SetPoint,
+                        "unit": "°C"
+                    },
+                    "pressure": {
+                        "value": config.Pressure1,
+                        "unit": "bar"
+                    }
+                },
+                "gh2": {
+                    "temperature": {
+                        "value": config.tempHeadGP2SetPoint,
+                        "unit": "°C"
+                    },
+                    "pressure": {
+                        "value": config.Pressure2,
+                        "unit": "bar"
+                    }
+                }
+            }
+            
+            self.wfile.write(json.dumps(status_data).encode())
+            
+        elif self.path == '/getdata':
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
@@ -236,11 +271,11 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         
     def do_POST(self):
+        try:
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length).decode('utf-8')
         params = json.loads(post_data)
         
-        try:
             if self.path == '/setmainconfig':
                 # Log the received request
                 print("\nReceived POST request to /setmainconfig")
