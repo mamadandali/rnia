@@ -5,16 +5,15 @@ import json
 import threading
 import time
 import logging
-from uart_comm import UARTCommunication
+import sys
 
-# Configure logging
+# Configure logging to print to both file and console
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
+    format='%(message)s',  # Remove timestamp and level
     handlers=[
-        logging.FileHandler('backend.log'),
-        logging.StreamHandler()
+        logging.FileHandler('backend.log', mode='w'),  # Clear file on start
+        logging.StreamHandler(sys.stdout)  # Print to console
     ]
 )
 logger = logging.getLogger(__name__)
@@ -37,6 +36,26 @@ class Config:
             "HeadGP2WaterFlow": 0.0,
             "Current": 0.0,
             "Voltage": 0.0
+        }
+        
+        # Group Head 1 Configuration
+        self.gh1_config = {
+            "temperature": 91.0,
+            "extraction_volume": 0,
+            "extraction_time": 20,
+            "pre_infusion": 0,
+            "purge": 0,
+            "backflush": False
+        }
+        
+        # Group Head 2 Configuration
+        self.gh2_config = {
+                "temperature": 92.0,
+            "extraction_volume": 0,
+                "extraction_time": 20,
+            "pre_infusion": 0,
+            "purge": 0,
+            "backflush": False
         }
         
         # System states
@@ -82,76 +101,20 @@ class Config:
         self.backflush1 = 4
         self.backflush2 = 4
 
-        # Initialize UART communication
-        self.uart = UARTCommunication()
-        self.uart.set_data_callback(self.handle_mcu_data)
-        self.uart.start()
-        logger.info("UART communication initialized")
-
-    def handle_mcu_data(self, data):
-        """Handle data received from MCU"""
-        try:
-            logger.debug(f"Received MCU data: {data}")
-            
-            # Update sensor values
-            if 'sensors' in data:
-                for sensor_id, value in data['sensors'].items():
-                    if sensor_id in self.sensors:
-                        self.sensors[sensor_id] = value
-                        logger.debug(f"Updated sensor {sensor_id} to {value}")
-            
-            # Update system states
-            if 'states' in data:
-                for state_id, value in data['states'].items():
-                    if hasattr(self, state_id):
-                        setattr(self, state_id, value)
-                        logger.debug(f"Updated state {state_id} to {value}")
-                        
-        except Exception as e:
-            logger.error(f"Error handling MCU data: {e}")
-
-    def send_to_mcu(self):
-        """Send current state to MCU"""
-        try:
-            state = {
-                'sensors': self.sensors,
-                'states': {
-                    'FLOWGPH1CGF': self.FLOWGPH1CGF,
-                    'FLOWGPH2CGF': self.FLOWGPH2CGF,
-                    'tempMainTankFlag': self.tempMainTankFlag,
-                    'tempHeadGP1Flag': self.tempHeadGP1Flag,
-                    'tempHeadGP2Flag': self.tempHeadGP2Flag,
-                    'enableHeadGP1': self.enableHeadGP1,
-                    'enableHeadGP2': self.enableHeadGP2,
-                    'enableMainTank': self.enableMainTank,
-                    'Pressure1': self.Pressure1,
-                    'Pressure2': self.Pressure2,
-                    'mainTankState': self.mainTankState,
-                    'HGP1State': self.HGP1State,
-                    'HGP2State': self.HGP2State,
-                    'HGP1ACTIVE': self.HGP1ACTIVE,
-                    'HGP2ACTIVE': self.HGP2ACTIVE
-                }
-            }
-            self.uart.send_data(state)
-            logger.debug("Sent state to MCU")
-        except Exception as e:
-            logger.error(f"Error sending state to MCU: {e}")
-
-    def cleanup(self):
-        """Cleanup resources"""
-        try:
-            self.uart.stop()
-            logger.info("UART communication stopped")
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+        # Main ampere configuration
+        self.mainAmpereConfig = {
+            "temperature": 125.0,
+            "pressure": 9.0
+        }
+        print("Configuration initialized")
 
 # Create global config instance
 config = Config()
 
 class RequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        logger.info(format % args)
+        # Don't log HTTP requests
+        pass
     
     def do_GET(self):
         if self.path == '/getdata':
@@ -184,7 +147,6 @@ class RequestHandler(BaseHTTPRequestHandler):
             data["HeadGP1TopTemp"] = str(config.sensors["HeadGP1TopTemp"])
             data["HeadGP2TopTemp"] = str(config.sensors["HeadGP2TopTemp"])
             
-            logger.debug(f"Sending data response: {data}")
             self.wfile.write(json.dumps(data).encode())
             
         elif self.path == '/geterror':
@@ -199,7 +161,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                 "MainTankTemperatureStatus": config.tempMainTankFlag
             }
             
-            logger.debug(f"Sending error response: {data}")
             self.wfile.write(json.dumps(data).encode())
             
         elif self.path == '/getgauge':
@@ -235,7 +196,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                 }
             }
             
-            logger.debug(f"Sending gauge data: {gauge_data}")
             self.wfile.write(json.dumps(gauge_data).encode())
 
         elif self.path == '/getghconfig':
@@ -245,31 +205,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             
             gh_config = {
-                "gh1": {
-                    "temperature": config.tempHeadGP1SetPoint,
-                    "pre_infusion": {
-                        "enabled": config.HGP1PreInfusion == 1,
-                        "time": config.HGP1PreInfusion
-                    },
-                    "extraction_time": config.HGP1ExtractionTime,
-                    "volume": config.HGP1FlowVolume,
-                    "pressure": config.Pressure1,
-                    "flow": config.FLOWGPH1CGF
-                },
-                "gh2": {
-                    "temperature": config.tempHeadGP2SetPoint,
-                    "pre_infusion": {
-                        "enabled": config.HGP2PreInfusion == 1,
-                        "time": config.HGP2PreInfusion
-                    },
-                    "extraction_time": config.HGP2ExtractionTime,
-                    "volume": config.HGP2FlowVolume,
-                    "pressure": config.Pressure2,
-                    "flow": config.FLOWGPH2CGF
-                }
+                "gh1": config.gh1_config,
+                "gh2": config.gh2_config
             }
             
-            logger.debug(f"Sending group head config: {gh_config}")
             self.wfile.write(json.dumps(gh_config).encode())
 
         elif self.path == '/getmainconfig':
@@ -278,13 +217,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             
-            main_config = {
-                "temperature": config.tempMainTankSetPoint,
-                "pressure": config.Pressure1,
-                "flow": config.FLOWGPH1CGF
-            }
+            main_config = config.mainAmpereConfig.copy()
             
-            logger.debug(f"Sending main config: {main_config}")
             self.wfile.write(json.dumps(main_config).encode())
             
         else:
@@ -306,59 +240,97 @@ class RequestHandler(BaseHTTPRequestHandler):
         post_data = self.rfile.read(content_length).decode('utf-8')
         params = json.loads(post_data)
         
-        logger.info(f"Received POST request to {self.path}")
-        logger.info(f"Request data: {json.dumps(params, indent=2)}")
-        
         try:
-            if self.path == '/setcup':
-                config.cup = params['cupWarmer']
-                config.tempCupFlag = True
+            if self.path == '/setmainconfig':
+                # Log the received request
+                print("\nReceived POST request to /setmainconfig")
+                print("Request data:", json.dumps(params, indent=2))
                 
-            elif self.path == '/setlight':
-                config.light = params['light']
-                config.baristaLight = True
+                # Get the new configuration
+                new_config = params.get('config', {})
                 
-            elif self.path == '/backflush':
-                machine_id = params['machineId']
-                if machine_id == 1:
-                    config.backflush1 = 0
-                elif machine_id == 2:
-                    config.backflush2 = 0
-                    
-            elif self.path == '/toggleOffOn':
-                config.HGP12MFlag = params['machineId']
-                config.HGPCheckStatus = True
+                # Update main configuration
+                config.mainAmpereConfig.update({
+                    "temperature": float(new_config.get('temperature', config.mainAmpereConfig['temperature']))
+                })
                 
-            elif self.path == '/eco':
-                config.ecomode = params['ecomode']
-                
-            elif self.path == '/discharg':
-                config.dischargeMode = params['dischargeMode']
-                
-            elif self.path == '/setdata':
-                config.HGP1FlowVolume = params['GH1_volume']
-                config.HGP2FlowVolume = params['GH2_volume']
-                config.HGP1PreInfusion = params['GH1_preInfusion']
-                config.HGP2PreInfusion = params['GH2_preInfusion']
-                config.HGP1ExtractionTime = params['GH1_extractionTime']
-                config.HGP2ExtractionTime = params['GH2_extractionTime']
-                config.tempMainTankSetPoint = params['mainTankTemp']
-                config.tempHeadGP1SetPoint = params['GH1_temp']
-                config.tempHeadGP2SetPoint = params['GH2_temp']
-
-            # Send updated state to MCU
-            config.send_to_mcu()
+                # Log the updated configuration
+                print("\nUpdated Main Configuration:")
+                print("--------------------------------")
+                print(json.dumps({
+                    "temperature": config.mainAmpereConfig['temperature']
+                }, indent=2))
+                print("--------------------------------\n")
             
-            self.send_response(200)
-            self.send_header('Content-type', 'text/html')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.send_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
-            self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-            self.end_headers()
-            self.wfile.write(b'POST request received!')
+            elif self.path == '/saveghconfig':
+                # Log the received request
+                print("\nReceived POST request to /saveghconfig")
+                print("Request data:", json.dumps(params, indent=2))
+                
+                # Get the new configuration
+                new_config = params.get('config', {})
+                gh_id = params.get('gh_id', 'ghundefined')
+                
+                # Update Group Head 1
+                config.gh1_config.update({
+                    "temperature": float(new_config.get('temperature', config.gh1_config['temperature'])),
+                    "extraction_volume": int(new_config.get('volume', config.gh1_config['extraction_volume'])),
+                    "extraction_time": int(new_config.get('extraction_time', config.gh1_config['extraction_time'])),
+                    "pre_infusion": int(new_config.get('pre_infusion', {}).get('time', config.gh1_config['pre_infusion'])),
+                    "purge": int(new_config.get('purge', config.gh1_config['purge'])),
+                    "backflush": bool(new_config.get('backflush', config.gh1_config['backflush']))
+                })
+                
+                # Update Group Head 2
+                config.gh2_config.update({
+                    "temperature": float(new_config.get('temperature', config.gh2_config['temperature'])),
+                    "extraction_volume": int(new_config.get('volume', config.gh2_config['extraction_volume'])),
+                    "extraction_time": int(new_config.get('extraction_time', config.gh2_config['extraction_time'])),
+                    "pre_infusion": int(new_config.get('pre_infusion', {}).get('time', config.gh2_config['pre_infusion'])),
+                    "purge": int(new_config.get('purge', config.gh2_config['purge'])),
+                    "backflush": bool(new_config.get('backflush', config.gh2_config['backflush']))
+                })
+
+                # Log the updated configurations
+                print("\nUpdated Group Head Configurations:")
+                print("--------------------------------")
+                print("Group Head 1:")
+                print(json.dumps({
+                    "temperature": config.gh1_config['temperature'],
+                    "pre_infusion": {
+                        "enabled": bool(config.gh1_config['pre_infusion'] > 0),
+                        "time": config.gh1_config['pre_infusion']
+                    },
+                    "extraction_time": config.gh1_config['extraction_time'],
+                    "volume": config.gh1_config['extraction_volume'],
+                    "purge": config.gh1_config['purge'],
+                    "backflush": config.gh1_config['backflush']
+                }, indent=2))
+                print("\nGroup Head 2:")
+                print(json.dumps({
+                    "temperature": config.gh2_config['temperature'],
+                    "pre_infusion": {
+                        "enabled": bool(config.gh2_config['pre_infusion'] > 0),
+                        "time": config.gh2_config['pre_infusion']
+                    },
+                    "extraction_time": config.gh2_config['extraction_time'],
+                    "volume": config.gh2_config['extraction_volume'],
+                    "purge": config.gh2_config['purge'],
+                    "backflush": config.gh2_config['backflush']
+                }, indent=2))
+                print("--------------------------------\n")
+
+            # Send success response
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.end_headers()
+        self.wfile.write(b'POST request received!')
             
         except Exception as e:
-            logger.error(f"Error processing POST request: {e}")
+            print(f"Error processing POST request: {e}")
             self.send_response(500)
             self.send_header('Content-type', 'text/html')
             self.send_header('Access-Control-Allow-Origin', '*')
@@ -368,12 +340,11 @@ class RequestHandler(BaseHTTPRequestHandler):
 def run_server(port=8000):
     server_address = ('', port)
     httpd = HTTPServer(server_address, RequestHandler)
-    logger.info(f'Starting server on port {port}...')
+    print(f'Starting server on port {port}...')
     try:
-        httpd.serve_forever()
+    httpd.serve_forever()
     except KeyboardInterrupt:
-        logger.info("Shutting down server...")
-        config.cleanup()
+        print("Shutting down server...")
         httpd.server_close()
 
 if __name__ == '__main__':
