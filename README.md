@@ -542,9 +542,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                 elif target == 'gh1':
                     new_state = 1 if status else 0
                     if new_state != gh1_button_state:
-                        print(f"\nUpdating GH1 button state:")
-                        print(f"Old state: {gh1_button_state}")
-                        print(f"New state: {new_state}")
                         gh1_button_state = new_state
                         state_changed = True
                 elif target == 'gh2':
