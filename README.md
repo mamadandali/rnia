@@ -183,6 +183,8 @@ def handle_uart_message(flag: int, values: list):
 config = Config()
 
 # Initialize UART communication
+print("\n=== Starting Backend Server ===")
+print("Initializing UART communication...")
 uart = UARTCommunicator(port='/dev/ttyAMA0')
 uart.set_message_callback(handle_uart_message)
 try:
@@ -190,6 +192,7 @@ try:
     print("Port: /dev/ttyAMA0")
     print("Baudrate: 9600")
     uart.start()
+    print("UART initialization completed successfully")
 except Exception as e:
     print(f"\n!!! UART INITIALIZATION ERROR !!!")
     print(f"Error type: {type(e).__name__}")
@@ -227,16 +230,35 @@ def send_gh_uart(flag, cfg):
 
 def send_main_uart():
     """Send main status UART message"""
-    print("\n=== Sending Main UART Message ===")
-    pressure = int(round(config.pressureConfig['pressure']))
-    main_temp = int(round(config.mainAmpereConfig['temperature']))
-    print(f"Main boiler state: {main_boiler_state}")
-    print(f"GH1 button state: {gh1_button_state}")
-    print(f"GH2 button state: {gh2_button_state}")
-    print(f"Pressure: {pressure}")
-    print(f"Main temp: {main_temp}")
-    uart.send_main_status(main_boiler_state, gh1_button_state, gh2_button_state, pressure, main_temp)
-    print("=== Main UART Message Sent ===\n")
+    print("\n=== Attempting to Send Main UART Message ===")
+    try:
+        pressure = int(round(config.pressureConfig['pressure']))
+        main_temp = int(round(config.mainAmpereConfig['temperature']))
+        
+        print("Current states:")
+        print(f"Main boiler state: {main_boiler_state}")
+        print(f"GH1 button state: {gh1_button_state}")
+        print(f"GH2 button state: {gh2_button_state}")
+        print(f"Pressure: {pressure}")
+        print(f"Main temp: {main_temp}")
+        
+        print("\nLast main data:", last_main_data)
+        new_main = [main_boiler_state, gh1_button_state, gh2_button_state, pressure, main_temp]
+        print("New main data:", new_main)
+        
+        if last_main_data != new_main:
+            print("State changed, sending UART message...")
+            uart.send_main_status(main_boiler_state, gh1_button_state, gh2_button_state, pressure, main_temp)
+            print("=== Main UART Message Sent ===\n")
+        else:
+            print("No state change, skipping UART message")
+    except Exception as e:
+        print(f"\n!!! Error in send_main_uart !!!")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        print("==============================\n")
 
 def send_system_status_uart():
     """Send system status UART message"""
@@ -489,17 +511,13 @@ class RequestHandler(BaseHTTPRequestHandler):
 
             elif self.path == '/setstatusupdate':
                 print("\n=== Processing Button State Update ===")
-                print(f"Target: {params.get('target')}")
-                print(f"Status: {params.get('status')}")
                 target = params.get('target')
                 status = params.get('status')
-                state_changed = False
+                print(f"Target: {target}")
+                print(f"Status: {status}")
+                print(f"Current states - Main: {main_boiler_state}, GH1: {gh1_button_state}, GH2: {gh2_button_state}")
                 
-                print("\nCurrent states:")
-                print("Button states:")
-                print(f"- Main boiler button: {main_boiler_state}")
-                print(f"- GH1 button: {gh1_button_state}")
-                print(f"- GH2 button: {gh2_button_state}")
+                state_changed = False
                 
                 if target == 'main_boiler':
                     new_state = 1 if status else 0
@@ -527,13 +545,26 @@ class RequestHandler(BaseHTTPRequestHandler):
                         state_changed = True
                 
                 if state_changed:
-                    print("\nButton state changed, sending flag 3 UART message...")
+                    print("\nButton state changed, preparing to send UART message...")
+                    print("Current states:")
+                    print(f"Main boiler: {main_boiler_state}")
+                    print(f"GH1 button: {gh1_button_state}")
+                    print(f"GH2 button: {gh2_button_state}")
+                    print(f"Pressure: {int(round(config.pressureConfig['pressure']))}")
+                    print(f"Main temp: {int(round(config.mainAmpereConfig['temperature']))}")
+                    
                     new_main = [main_boiler_state, gh1_button_state, gh2_button_state,
                               int(round(config.pressureConfig['pressure'])), 
                               int(round(config.mainAmpereConfig['temperature']))]
+                    print(f"Last main data: {last_main_data}")
+                    print(f"New main data: {new_main}")
+                    
                     if last_main_data != new_main:
+                        print("State changed, sending UART message...")
                         send_main_uart()
                         last_main_data = new_main
+                    else:
+                        print("No state change detected, skipping UART message")
                 else:
                     print("\nNo button state changes, skipping UART message")
                 
