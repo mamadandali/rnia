@@ -1,284 +1,592 @@
-import serial
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any
+from urllib.parse import parse_qs
+import json
 import threading
 import time
 import logging
-from typing import Dict, Any, Optional, Callable
+import sys
+from uart_comm import UARTCommunicator
 
-# Configure logging
+# Configure logging to print to both file and console
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    level=logging.DEBUG,  # Change to DEBUG level
+    format='%(asctime)s - %(levelname)s - %(message)s',  # Add timestamp and level
+    handlers=[
+        logging.FileHandler('backend.log', mode='a'),  # Append mode instead of write
+        logging.StreamHandler(sys.stdout)  # Print to console
+    ]
 )
 logger = logging.getLogger(__name__)
 
-class UARTCommunicator:
-    def __init__(self, port='/dev/ttyAMA0', baudrate=9600):
-        self.port = port
-        self.baudrate = baudrate
-        self.ser = None
-        self.running = False
-        self.data_lock = threading.Lock()
-        
-        # Callback for received messages
-        self.message_callback: Optional[Callable[[int, list], None]] = None
-        
-        print(f"\n=== UART Communicator Initialized ===")
-        print(f"Port: {self.port}")
-        print(f"Baudrate: {self.baudrate}")
-        print("====================================\n")
-        
-        # Current state data
-        self.current_data = {
-            "main_temperature": 110.0,  # Will be divided by 10 when used
-            "gh1": {
-                "temperature": 921.0,   # Will be divided by 10 when used
-                "pressure": 5.0,
-                "flow": 80.0
-            },
-            "gh2": {
-                "temperature": 921.0,   # Will be divided by 10 when used
-                "pressure": 5.0,
-                "flow": 80.0
-            }
+class Config:
+    def __init__(self):
+        # Sensor values
+        self.sensors = {
+            "MainTankWaterLevel": 0.0,
+            "HeadGP1WaterLevel": 0.0,
+            "HeadGP2WaterLevel": 0.0,
+            "MainTankTemp": 0.0,
+            "HeadGP1TopTemp": 0.0,
+            "HeadGP1BottomTemp": 0.0,
+            "HeadGP2TopTemp": 0.0,
+            "HeadGP2BottomTemp": 0.0,
+            "Pressure": 0.0,
+            "MainTankWaterFlow": 0.0,
+            "HeadGP1WaterFlow": 0.0,
+            "HeadGP2WaterFlow": 0.0,
+            "Current": 0.0,
+            "Voltage": 0.0
         }
+        
+        # Group Head 1 Configuration
+        self.gh1_config = {
+            "temperature": 91.0,
+            "extraction_volume": 0,
+            "extraction_time": 20,
+            "pre_infusion": 0,
+            "purge": 0,
+            "backflush": False
+        }
+        
+        # Group Head 2 Configuration
+        self.gh2_config = {
+            "temperature": 92.0,
+            "extraction_volume": 0,
+            "extraction_time": 20,
+            "pre_infusion": 0,
+            "purge": 0,
+            "backflush": False
+        }
+        
+        # System states
+        self.FLOWGPH1CGF = 0.0
+        self.FLOWGPH2CGF = 0.0
+        self.tempMainTankFlag = True
+        self.tempHeadGP1Flag = True
+        self.tempHeadGP2Flag = True
+        self.enableHeadGP1 = True
+        self.enableHeadGP2 = True
+        self.enableMainTank = True
+        self.Pressure1 = 0.0
+        self.Pressure2 = 0.0
+        
+        # UI settings
+        self.HGP1FlowVolume = 0
+        self.HGP2FlowVolume = 0
+        self.HGP1PreInfusion = 0
+        self.HGP2PreInfusion = 0
+        self.HGP1ExtractionTime = 20
+        self.HGP2ExtractionTime = 20
+        self.tempMainTankSetPoint = 110.0
+        self.tempHeadGP1SetPoint = 114.0
+        self.tempHeadGP2SetPoint = 92.0
+        
+        # Additional features
+        self.tempCupFlag = False
+        self.cup = 0
+        self.baristaLight = False
+        self.light = 0
+        self.ecomode = 0
+        self.dischargeMode = 0
+        
+        # System states
+        self.mainTankState = 1
+        self.HGP1State = 1
+        self.HGP2State = 1
+        self.HGP1ACTIVE = 0
+        self.HGP2ACTIVE = 0
+        self.HGP12MFlag = 4
+        self.sebar = 0
+        self.HGPCheckStatus = False
+        self.backflush1 = 4
+        self.backflush2 = 4
+        
+        # Timer for GH activation reset
+        self.gh1_timer = None
+        self.gh2_timer = None
+        
+        # Extraction process flags
+        self.gh1_extraction_in_progress = False
+        self.gh2_extraction_in_progress = False
 
-    def set_message_callback(self, callback: Callable[[int, list], None]):
-        """Set callback for received messages"""
-        self.message_callback = callback
+        # GH Activation flags (13 for GH1, 14 for GH2)
+        self.GH1_ACTIVATION_FLAG = 0  # 0 = not running, 1 = running
+        self.GH2_ACTIVATION_FLAG = 0  # 0 = not running, 1 = running
 
-    def start(self):
-        """Start the UART communication"""
-        try:
-            self.ser = serial.Serial(self.port, self.baudrate)
-            time.sleep(2)  # Wait for serial connection to initialize
-            self.running = True
-            
-            # Start reading thread
-            self.read_thread = threading.Thread(target=self._read_loop)
-            self.read_thread.daemon = True
-            self.read_thread.start()
-            
-            print(f"UART communication started on {self.port} at {self.baudrate} baud")
-        except Exception as e:
-            print(f"Error starting UART communication: {e}")
-            self.stop()
+        # Main ampere configuration
+        self.mainAmpereConfig = {
+            "temperature": 125.0,
+            "pressure": 9.0
+        }
+        
+        # Pressure configuration
+        self.pressureConfig = {
+            "pressure": 9.0,
+            "max_pressure": 12.0,
+            "min_pressure": 0.0
+        }
+        
+        print("Configuration initialized")
 
-    def stop(self):
-        """Stop the UART communication"""
-        self.running = False
-        if self.ser and self.ser.is_open:
-            self.ser.close()
-        print("UART communication stopped")
+    def start_gh_timer(self, gh_number, extraction_time):
+        """Start a timer to reset GH activation after extraction time"""
+        if gh_number == 1:
+            if self.gh1_timer:
+                self.gh1_timer.cancel()
+            self.gh1_extraction_in_progress = True
+            self.gh1_timer = threading.Timer(extraction_time + 5, self.reset_gh_active, args=[1])
+            self.gh1_timer.start()
+        elif gh_number == 2:
+            if self.gh2_timer:
+                self.gh2_timer.cancel()
+            self.gh2_extraction_in_progress = True
+            self.gh2_timer = threading.Timer(extraction_time + 5, self.reset_gh_active, args=[2])
+            self.gh2_timer.start()
 
-    def _read_loop(self):
-        """Continuously read data from UART"""
-        while self.running:
-            try:
-                if self.ser.in_waiting:
-                    data = self.ser.readline().decode('utf-8').strip()
-                    self._process_received_data(data)
-            except Exception as e:
-                print(f"Error reading from UART: {e}")
-                time.sleep(1)
+    def reset_gh_active(self, gh_number):
+        """Reset GH activation flag"""
+        if gh_number == 1:
+            self.HGP1ACTIVE = 0
+            self.gh1_extraction_in_progress = False
+            print(f"Automatically reset HGP1ACTIVE to 0 after extraction")
+        elif gh_number == 2:
+            self.HGP2ACTIVE = 0
+            self.gh2_extraction_in_progress = False
+            print(f"Automatically reset HGP2ACTIVE to 0 after extraction")
 
-    def _process_received_data(self, data: str):
-        """Process received data from UART"""
-        try:
-            parts = data.split(';')
-            if len(parts) < 2:
-                print(f"Invalid UART message format: {data}")
-                return
-
-            flag = int(parts[0])
-            values = [float(x) if '.' in x else int(x) for x in parts[1:]]
-            
-            # Print received message
-            print(f"\nUART IN: {data}")
-            
-            # Update current data based on flag
-            with self.data_lock:
-                if flag == 8:  # Main boiler temperature
-                    self.current_data['main_temperature'] = values[0]
-                elif flag == 9:  # GH1 status
-                    self.current_data['gh1'].update({
-                        'temperature': values[0],
-                        'pressure': values[1],
-                        'flow': values[2]
-                    })
-                elif flag == 10:  # GH2 status
-                    self.current_data['gh2'].update({
-                        'temperature': values[0],
-                        'pressure': values[1],
-                        'flow': values[2]
-                    })
-                elif flag == 13:  # GH1 extraction start
-                    self.current_data['gh1']['activation'] = values[0]
-                elif flag == 14:  # GH2 extraction start
-                    self.current_data['gh2']['activation'] = values[0]
-
-            # Call message callback if set
-            if self.message_callback:
-                self.message_callback(flag, values)
-
-        except ValueError as e:
-            print(f"Error parsing UART message: {e}")
-        except Exception as e:
-            print(f"Error processing UART message: {e}")
-
-    def get_current_data(self) -> Dict[str, Any]:
-        """Get current sensor data"""
-        with self.data_lock:
-            return self.current_data.copy()
-
-    def send_string(self, s: str):
-        """Send a UART message string"""
-        try:
-            if not self.ser:
-                print(f"\n!!! UART ERROR: Serial port not initialized !!!")
-                print(f"Attempted to send: {s}")
-                return
-                
-            if not self.ser.is_open:
-                print(f"\n!!! UART ERROR: Serial port not open !!!")
-                print(f"Attempted to send: {s}")
-                return
-                
-            # Format the message with newline
-            message = s + '\n'
-            encoded_message = message.encode()
-            
-            # Print before sending
-            print(f"\n=== UART OUTGOING MESSAGE ===")
-            print(f"Raw message: {s}")
-            print(f"Encoded: {encoded_message}")
-            
-            # Send the message
-            bytes_written = self.ser.write(encoded_message)
-            self.ser.flush()  # Ensure message is sent
-            
-            # Print confirmation
-            print(f"Bytes written: {bytes_written}")
-            print(f"Message sent successfully")
-            print("=============================\n")
-            
-        except Exception as e:
-            print(f"\n!!! UART SEND ERROR !!!")
-            print(f"Error type: {type(e).__name__}")
-            print(f"Error message: {str(e)}")
-            print(f"Failed message: {s}")
-            import traceback
-            print(f"Traceback: {traceback.format_exc()}")
-            print("========================\n")
-
-    def send_gh_config(self, gh_id: int, config: Dict[str, Any]):
-        """Send group head configuration (flag 1 or 2)"""
-        try:
-            print(f"\n=== Sending GH{gh_id} Configuration ===")
-            flag = 1 if gh_id == 1 else 2
-            
-            # Prepare values
-            temp = int(round(config['temperature'] * 10))  # Multiply by 10
-            ext_vol = int(round(config['extraction_volume']))
-            ext_time = int(round(config['extraction_time']))
-            purge = int(round(config.get('purge', 0)))
-            preinf = int(round(config.get('pre_infusion', 0)))
-            
-            # Print configuration details
-            print(f"Temperature: {temp/10}°C (raw: {temp})")
-            print(f"Extraction Volume: {ext_vol}ml")
-            print(f"Extraction Time: {ext_time}s")
-            print(f"Purge: {purge}s")
-            print(f"Pre-infusion: {preinf}s")
-            
-            # Send main configuration
-            message = f"{flag};{temp};{ext_vol};{ext_time};{purge};{preinf}"
-            self.send_string(message)
-            
-            # Send backflush status
-            backflush_flag = 11 if gh_id == 1 else 12
-            backflush_value = 1 if config.get('backflush', False) else 0
-            backflush_message = f"{backflush_flag};{backflush_value}"
-            print(f"\nSending backflush status: {backflush_value}")
-            self.send_string(backflush_message)
-            
-            print(f"=== GH{gh_id} Configuration Sent ===\n")
-            
-        except Exception as e:
-            print(f"\n!!! GH Config Send Error !!!")
-            print(f"Error type: {type(e).__name__}")
-            print(f"Error message: {str(e)}")
-            print(f"GH ID: {gh_id}")
-            print(f"Config: {config}")
-            import traceback
-            print(f"Traceback: {traceback.format_exc()}")
-            print("============================\n")
-
-    def send_main_status(self, main_boiler: int, gh1_button: int, gh2_button: int, pressure: int, temp: int):
-        """Send main status (flag 3)"""
-        try:
-            print(f"\n=== Sending Main Status ===")
-            print(f"Main boiler: {main_boiler}")
-            print(f"GH1 button: {gh1_button}")
-            print(f"GH2 button: {gh2_button}")
-            print(f"Pressure: {pressure} bar")
-            print(f"Temperature: {temp/10}°C (raw: {temp})")
-            
-            message = f"3;{main_boiler};{gh1_button};{gh2_button};{pressure};{temp}"
-            self.send_string(message)
-            
-            print("=== Main Status Sent ===\n")
-            
-        except Exception as e:
-            print(f"\n!!! Main Status Send Error !!!")
-            print(f"Error type: {type(e).__name__}")
-            print(f"Error message: {str(e)}")
-            print(f"Values: main_boiler={main_boiler}, gh1={gh1_button}, gh2={gh2_button}, pressure={pressure}, temp={temp}")
-            import traceback
-            print(f"Traceback: {traceback.format_exc()}")
-            print("===========================\n")
-
-    def send_system_status(self, mode: int, discharge: int, light: int, cup_warmer: int):
-        """Send system status (flag 4)"""
-        try:
-            print(f"\n=== Sending System Status ===")
-            print(f"Mode: {mode}")
-            print(f"Discharge: {discharge}")
-            print(f"Light: {light}%")
-            print(f"Cup warmer: {cup_warmer}%")
-            
-            message = f"4;{mode};{discharge};{light};{cup_warmer}"
-            self.send_string(message)
-            
-            print("=== System Status Sent ===\n")
-            
-        except Exception as e:
-            print(f"\n!!! System Status Send Error !!!")
-            print(f"Error type: {type(e).__name__}")
-            print(f"Error message: {str(e)}")
-            print(f"Values: mode={mode}, discharge={discharge}, light={light}, cup_warmer={cup_warmer}")
-            import traceback
-            print(f"Traceback: {traceback.format_exc()}")
-            print("=============================\n")
-
-    def send_gh_activation(self, gh_id: int, is_active: bool):
-        """Send GH activation status (flag 13 or 14)"""
-        try:
-            flag = 13 if gh_id == 1 else 14
-            value = 1 if is_active else 0
-            message = f"{flag};{value}"
-            self.send_string(message)
-        except Exception as e:
-            print(f"Error sending GH activation: {e}")
-
-# Example usage
-if __name__ == "__main__":
-    uart = UARTCommunicator()
+def handle_uart_message(flag: int, values: list):
+    """Handle received UART messages"""
     try:
-        uart.start()
-        while True:
-            time.sleep(1)
+        if flag == 8:  # Main boiler temperature
+            config.sensors["MainTankTemp"] = values[0] / 10  # Convert back to decimal
+        elif flag == 9:  # GH1 status
+            config.sensors["HeadGP1TopTemp"] = values[0] / 10
+            config.Pressure1 = values[1]
+            config.FLOWGPH1CGF = values[2]
+        elif flag == 10:  # GH2 status
+            config.sensors["HeadGP2TopTemp"] = values[0] / 10
+            config.Pressure2 = values[1]
+            config.FLOWGPH2CGF = values[2]
+        elif flag == 13:  # GH1 extraction start
+            config.GH1_ACTIVATION_FLAG = int(values[0])
+            if int(values[0]) == 1:
+                config.start_gh_timer(1, config.HGP1ExtractionTime)
+        elif flag == 14:  # GH2 extraction start
+            config.GH2_ACTIVATION_FLAG = int(values[0])
+            if int(values[0]) == 1:
+                config.start_gh_timer(2, config.HGP2ExtractionTime)
+    except Exception as e:
+        print(f"Error handling UART message: {e}")
+
+# Create global config instance
+config = Config()
+
+# Initialize UART communication
+uart = UARTCommunicator(port='/dev/ttyAMA0')
+uart.set_message_callback(handle_uart_message)
+try:
+    print("\n=== Initializing UART Communication ===")
+    print("Port: /dev/ttyAMA0")
+    print("Baudrate: 9600")
+    uart.start()
+except Exception as e:
+    print(f"\n!!! UART INITIALIZATION ERROR !!!")
+    print(f"Error type: {type(e).__name__}")
+    print(f"Error message: {str(e)}")
+    import traceback
+    print(f"Traceback: {traceback.format_exc()}")
+    print("====================================\n")
+
+# Initialize system status variables
+print("Initializing system status variables...")
+
+# System status variables
+mode_state = 0  # 0=off, 1=eco, 2=sleep
+boiler_discharge = 0  # 0=nothing, 1=drain&refill, 2=drain&shutdown
+barista_light = 0  # 0-100 percentage
+cup_warmer = 0  # 0-100 percentage
+discharge_timer = None
+
+# Button and UART state variables
+main_boiler_state = 0  # 0 = off, 1 = on
+gh1_button_state = 0  # 0 = off, 1 = on
+gh2_button_state = 0  # 0 = off, 1 = on
+
+# State tracking variables
+last_main_data = [0, 0, 0, 9, 230]  # Initialize with default values
+last_gh1_data = None
+last_gh2_data = None
+
+def send_gh_uart(flag, cfg):
+    """Send group head configuration"""
+    print(f"\n=== Sending GH{flag} UART Message ===")
+    print(f"Configuration: {json.dumps(cfg, indent=2)}")
+    uart.send_gh_config(flag, cfg)
+    print(f"=== GH{flag} UART Message Sent ===\n")
+
+def send_main_uart():
+    """Send main status UART message"""
+    print("\n=== Sending Main UART Message ===")
+    pressure = int(round(config.pressureConfig['pressure']))
+    main_temp = int(round(config.mainAmpereConfig['temperature']))
+    print(f"Main boiler state: {main_boiler_state}")
+    print(f"GH1 button state: {gh1_button_state}")
+    print(f"GH2 button state: {gh2_button_state}")
+    print(f"Pressure: {pressure}")
+    print(f"Main temp: {main_temp}")
+    uart.send_main_status(main_boiler_state, gh1_button_state, gh2_button_state, pressure, main_temp)
+    print("=== Main UART Message Sent ===\n")
+
+def send_system_status_uart():
+    """Send system status UART message"""
+    print("\n=== Sending System Status UART Message ===")
+    print(f"Mode: {mode_state}")
+    print(f"Discharge: {boiler_discharge}")
+    print(f"Light: {barista_light}")
+    print(f"Cup warmer: {cup_warmer}")
+    uart.send_system_status(mode_state, boiler_discharge, barista_light, cup_warmer)
+    print("=== System Status UART Message Sent ===\n")
+
+class RequestHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        # Enable HTTP request logging
+        print(f"\n=== HTTP Request ===")
+        print(f"Path: {self.path}")
+        print(f"Method: {self.command}")
+        print(f"Headers: {dict(self.headers)}")
+        print("===================\n")
+    
+    def do_GET(self):
+        print(f"\n=== GET Request to {self.path} ===")
+        if self.path == '/getmainstatus':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            
+            status_data = {
+                "main_temperature": {
+                    "value": config.tempMainTankSetPoint,
+                    "unit": "°C"
+                },
+                "gh1": {
+                    "temperature": {
+                        "value": config.tempHeadGP1SetPoint,
+                        "unit": "°C"
+                    },
+                    "pressure": {
+                        "value": config.Pressure1,
+                        "unit": "bar"
+                    }
+                },
+                "gh2": {
+                    "temperature": {
+                        "value": config.tempHeadGP2SetPoint,
+                        "unit": "°C"
+                    },
+                    "pressure": {
+                        "value": config.Pressure2,
+                        "unit": "bar"
+                    }
+                }
+            }
+            
+            self.wfile.write(json.dumps(status_data).encode())
+            
+        elif self.path == '/getdata':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            
+            data = config.sensors.copy()
+            
+            # Add additional data
+            data["HeadGP1WaterFlow"] = config.FLOWGPH1CGF
+            data["HeadGP2WaterFlow"] = config.FLOWGPH2CGF
+            data["HGP1ACTIVE"] = config.HGP1ACTIVE
+            data["HGP2ACTIVE"] = config.HGP2ACTIVE
+            data["mainTankState"] = config.mainTankState
+            data["HGP1State"] = config.HGP1State
+            data["HGP2State"] = config.HGP2State
+            
+            # Add GH activation flags
+            data["GH1_ACTIVATION_FLAG"] = config.GH1_ACTIVATION_FLAG
+            data["GH2_ACTIVATION_FLAG"] = config.GH2_ACTIVATION_FLAG
+            
+            # Handle pressure data
+            if config.sebar == 0:
+                data["PressureGPH1"] = config.Pressure1
+                data["PressureGPH2"] = config.Pressure2
+            else:
+                data["PressureGPH1"] = "3"
+                data["PressureGPH2"] = "3"
+            
+            self.wfile.write(json.dumps(data).encode())
+            
+        elif self.path == '/geterror':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            
+            data = {
+                "HeadGroup1TemperatureStatus": config.tempHeadGP1Flag,
+                "HeadGroup2TemperatureStatus": config.tempHeadGP2Flag,
+                "MainTankTemperatureStatus": config.tempMainTankFlag
+            }
+            
+            self.wfile.write(json.dumps(data).encode())
+            
+        elif self.path == '/getgauge':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            
+            gauge_data = {
+                "pressure": {
+                    "value": config.Pressure1,
+                    "min": 0,
+                    "max": 12,
+                    "unit": "bar"
+                },
+                "temperature": {
+                    "value": config.tempMainTankSetPoint,
+                    "min": 0,
+                    "max": 120,
+                    "unit": "°C"
+                },
+                "flow": {
+                    "value": config.FLOWGPH1CGF,
+                    "min": 0,
+                    "max": 5,
+                    "unit": "L/min"
+                },
+                "water_level": {
+                    "value": config.sensors["MainTankWaterLevel"],
+                    "min": 0,
+                    "max": 100,
+                    "unit": "%"
+                }
+            }
+            
+            self.wfile.write(json.dumps(gauge_data).encode())
+
+    def do_POST(self):
+        print(f"\n=== POST Request to {self.path} ===")
+        global last_main_data, last_gh1_data, last_gh2_data, main_boiler_state, gh1_button_state, gh2_button_state
+        try:
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length).decode('utf-8')
+            print(f"Raw POST data: {post_data}")
+            params = json.loads(post_data)
+            print(f"Parsed POST data: {json.dumps(params, indent=2)}")
+            
+            if self.path == '/setpressureconfig':
+                print("\n=== Processing Pressure Config Update ===")
+                print(f"Config: {json.dumps(params.get('config', {}), indent=2)}")
+                new_config = params.get('config', {})
+                config.pressureConfig.update({
+                    "pressure": float(new_config.get('pressure', config.pressureConfig['pressure'])),
+                    "max_pressure": float(new_config.get('max_pressure', config.pressureConfig['max_pressure'])),
+                    "min_pressure": float(new_config.get('min_pressure', config.pressureConfig['min_pressure']))
+                })
+                
+                print("\nUpdated Pressure Configuration:")
+                print("--------------------------------")
+                print(json.dumps(config.pressureConfig, indent=2))
+                print("--------------------------------\n")
+                
+                new_main = [main_boiler_state, gh1_button_state, gh2_button_state, int(round(config.pressureConfig['pressure'])), int(round(config.mainAmpereConfig['temperature']))]
+                if last_main_data != new_main:
+                    send_main_uart()
+                    last_main_data = new_main
+            
+            elif self.path == '/setmainconfig':
+                print("\n=== Processing Main Config Update ===")
+                print(f"Config: {json.dumps(params.get('config', {}), indent=2)}")
+                new_config = params.get('config', {})
+                config.mainAmpereConfig.update({
+                    "temperature": float(new_config.get('temperature', config.mainAmpereConfig['temperature']))
+                })
+                
+                print("\nUpdated Main Configuration:")
+                print("--------------------------------")
+                print(json.dumps({
+                    "temperature": config.mainAmpereConfig['temperature']
+                }, indent=2))
+                print("--------------------------------\n")
+                
+                new_main = [main_boiler_state, gh1_button_state, gh2_button_state, int(round(config.pressureConfig['pressure'])), int(round(config.mainAmpereConfig['temperature']))]
+                if last_main_data != new_main:
+                    send_main_uart()
+                    last_main_data = new_main
+
+            elif self.path == '/saveghconfig':
+                print("\n=== Processing GH Config Save ===")
+                print(f"GH ID: {params.get('gh_id')}")
+                print(f"Config: {json.dumps(params.get('config', {}), indent=2)}")
+                new_config = params.get('config', {})
+                gh_id = params.get('gh_id', 'ghundefined')
+                
+                if gh_id == 'gh1':
+                    extraction_time = int(new_config.get('extraction_time', config.gh1_config['extraction_time']))
+                    config.gh1_config.update({
+                        "temperature": float(new_config.get('temperature', config.gh1_config['temperature'])),
+                        "extraction_volume": int(new_config.get('volume', config.gh1_config['extraction_volume'])),
+                        "extraction_time": extraction_time,
+                        "pre_infusion": int(new_config.get('pre_infusion', {}).get('time', config.gh1_config['pre_infusion'])),
+                        "purge": int(new_config.get('purge', config.gh1_config['purge'])),
+                        "backflush": bool(new_config.get('backflush', config.gh1_config['backflush']))
+                    })
+                    config.HGP1ExtractionTime = extraction_time
+                    send_gh_uart(1, config.gh1_config)
+                    last_gh1_data = [
+                        int(round(config.gh1_config['temperature'])),
+                        int(round(config.gh1_config['extraction_volume'])),
+                        int(round(config.gh1_config['extraction_time'])),
+                        int(round(config.gh1_config['purge'])),
+                        1 if config.gh1_config['pre_infusion'] > 0 else 0,
+                        int(round(config.gh1_config['pre_infusion']))
+                    ]
+                elif gh_id == 'gh2':
+                    extraction_time = int(new_config.get('extraction_time', config.gh2_config['extraction_time']))
+                    config.gh2_config.update({
+                        "temperature": float(new_config.get('temperature', config.gh2_config['temperature'])),
+                        "extraction_volume": int(new_config.get('volume', config.gh2_config['extraction_volume'])),
+                        "extraction_time": extraction_time,
+                        "pre_infusion": int(new_config.get('pre_infusion', {}).get('time', config.gh2_config['pre_infusion'])),
+                        "purge": int(new_config.get('purge', config.gh2_config['purge'])),
+                        "backflush": bool(new_config.get('backflush', config.gh2_config['backflush']))
+                    })
+                    config.HGP2ExtractionTime = extraction_time
+                    send_gh_uart(2, config.gh2_config)
+                    last_gh2_data = [
+                        int(round(config.gh2_config['temperature'])),
+                        int(round(config.gh2_config['extraction_volume'])),
+                        int(round(config.gh2_config['extraction_time'])),
+                        int(round(config.gh2_config['purge'])),
+                        1 if config.gh2_config['pre_infusion'] > 0 else 0,
+                        int(round(config.gh2_config['pre_infusion']))
+                    ]
+                
+                print("\nUpdated Group Head Configurations:")
+                print("--------------------------------")
+                print("Group Head 1:")
+                print(json.dumps(config.gh1_config, indent=2))
+                print("\nGroup Head 2:")
+                print(json.dumps(config.gh2_config, indent=2))
+                print("--------------------------------\n")
+                
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': True}).encode())
+                return
+
+            elif self.path == '/setstatusupdate':
+                print("\n=== Processing Button State Update ===")
+                print(f"Target: {params.get('target')}")
+                print(f"Status: {params.get('status')}")
+                target = params.get('target')
+                status = params.get('status')
+                state_changed = False
+                
+                print("\nCurrent states:")
+                print("Button states:")
+                print(f"- Main boiler button: {main_boiler_state}")
+                print(f"- GH1 button: {gh1_button_state}")
+                print(f"- GH2 button: {gh2_button_state}")
+                
+                if target == 'main_boiler':
+                    new_state = 1 if status else 0
+                    if new_state != main_boiler_state:
+                        print(f"\nUpdating main boiler button state:")
+                        print(f"Old state: {main_boiler_state}")
+                        print(f"New state: {new_state}")
+                        main_boiler_state = new_state
+                        state_changed = True
+                elif target == 'gh1':
+                    new_state = 1 if status else 0
+                    if new_state != gh1_button_state:
+                        print(f"\nUpdating GH1 button state:")
+                        print(f"Old state: {gh1_button_state}")
+                        print(f"New state: {new_state}")
+                        gh1_button_state = new_state
+                        state_changed = True
+                elif target == 'gh2':
+                    new_state = 1 if status else 0
+                    if new_state != gh2_button_state:
+                        print(f"\nUpdating GH2 button state:")
+                        print(f"Old state: {gh2_button_state}")
+                        print(f"New state: {new_state}")
+                        gh2_button_state = new_state
+                        state_changed = True
+                
+                if state_changed:
+                    print("\nButton state changed, sending flag 3 UART message...")
+                    new_main = [main_boiler_state, gh1_button_state, gh2_button_state,
+                              int(round(config.pressureConfig['pressure'])), 
+                              int(round(config.mainAmpereConfig['temperature']))]
+                    if last_main_data != new_main:
+                        send_main_uart()
+                        last_main_data = new_main
+                else:
+                    print("\nNo button state changes, skipping UART message")
+                
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+                return
+
+            # Send success response
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': True}).encode())
+            
+        except Exception as e:
+            print(f"\n!!! ERROR in POST request handling !!!")
+            print(f"Error type: {type(e).__name__}")
+            print(f"Error message: {str(e)}")
+            print(f"Request path: {self.path}")
+            print(f"Request headers: {dict(self.headers)}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
+            self.send_response(500)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'error': str(e)}).encode())
+
+def run_server(port=8000):
+    server_address = ('', port)
+    httpd = HTTPServer(server_address, RequestHandler)
+    print(f'\n=== Starting Backend Server ===')
+    print(f'Server address: {server_address}')
+    print(f'UART port: {uart.port}')
+    print(f'UART baudrate: {uart.baudrate}')
+    print('==============================\n')
+    try:
+        httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\nStopping UART communication...")
-    finally:
-        uart.stop() 
+        print("\n=== Shutting down server ===")
+        httpd.server_close()
+        uart.stop()
+    except Exception as e:
+        print(f"\n!!! SERVER ERROR !!!")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        httpd.server_close()
+        uart.stop()
+
+if __name__ == '__main__':
+    run_server() 
