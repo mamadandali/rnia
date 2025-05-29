@@ -1,1 +1,3 @@
-curl -X POST http://localhost:8000/saveghconfig -H "Content-Type: application/json" -d '{"gh_id":"gh1","config":{"temperature":92,"extraction_volume":30,"extraction_time":20,"pre_infusion":3,"purge":5,"backflush":false}}'
+curl -X POST http://localhost:8000/saveghconfig \
+  -H "Content-Type: application/json" \
+  -d '{"gh_id":"gh1","config":{"temperature":92,"extraction_volume":30,"extraction_time":20,"pre_infusion":{"time":3},"purge":5,"backflush":false}}'
