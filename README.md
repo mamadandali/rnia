@@ -242,10 +242,15 @@ def send_system_status_uart():
 
 class RequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        # Don't log HTTP requests
-        pass
+        # Enable HTTP request logging
+        print(f"\n=== HTTP Request ===")
+        print(f"Path: {self.path}")
+        print(f"Method: {self.command}")
+        print(f"Headers: {dict(self.headers)}")
+        print("===================\n")
     
     def do_GET(self):
+        print(f"\n=== GET Request to {self.path} ===")
         if self.path == '/getmainstatus':
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -362,16 +367,18 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(gauge_data).encode())
 
     def do_POST(self):
+        print(f"\n=== POST Request to {self.path} ===")
         global last_main_data, last_gh1_data, last_gh2_data, main_boiler_state, gh1_button_state, gh2_button_state
         try:
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length).decode('utf-8')
+            print(f"Raw POST data: {post_data}")
             params = json.loads(post_data)
+            print(f"Parsed POST data: {json.dumps(params, indent=2)}")
             
             if self.path == '/setpressureconfig':
-                print("\nReceived POST request to /setpressureconfig")
-                print("Request data:", json.dumps(params, indent=2))
-                
+                print("\n=== Processing Pressure Config Update ===")
+                print(f"Config: {json.dumps(params.get('config', {}), indent=2)}")
                 new_config = params.get('config', {})
                 config.pressureConfig.update({
                     "pressure": float(new_config.get('pressure', config.pressureConfig['pressure'])),
@@ -390,9 +397,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     last_main_data = new_main
             
             elif self.path == '/setmainconfig':
-                print("\nReceived POST request to /setmainconfig")
-                print("Request data:", json.dumps(params, indent=2))
-                
+                print("\n=== Processing Main Config Update ===")
+                print(f"Config: {json.dumps(params.get('config', {}), indent=2)}")
                 new_config = params.get('config', {})
                 config.mainAmpereConfig.update({
                     "temperature": float(new_config.get('temperature', config.mainAmpereConfig['temperature']))
@@ -411,8 +417,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                     last_main_data = new_main
 
             elif self.path == '/saveghconfig':
-                print("\nReceived POST request to /saveghconfig")
-                print("Request data:", json.dumps(params, indent=2))
+                print("\n=== Processing GH Config Save ===")
+                print(f"GH ID: {params.get('gh_id')}")
+                print(f"Config: {json.dumps(params.get('config', {}), indent=2)}")
                 new_config = params.get('config', {})
                 gh_id = params.get('gh_id', 'ghundefined')
                 
@@ -473,8 +480,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
 
             elif self.path == '/setstatusupdate':
-                print("\nReceived button state update request")
-                print("Request data:", json.dumps(params, indent=2))
+                print("\n=== Processing Button State Update ===")
+                print(f"Target: {params.get('target')}")
+                print(f"Status: {params.get('status')}")
                 target = params.get('target')
                 status = params.get('status')
                 state_changed = False
@@ -536,7 +544,13 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({'success': True}).encode())
             
         except Exception as e:
-            print(f"Error handling POST request: {e}")
+            print(f"\n!!! ERROR in POST request handling !!!")
+            print(f"Error type: {type(e).__name__}")
+            print(f"Error message: {str(e)}")
+            print(f"Request path: {self.path}")
+            print(f"Request headers: {dict(self.headers)}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
             self.send_response(500)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
@@ -546,11 +560,23 @@ class RequestHandler(BaseHTTPRequestHandler):
 def run_server(port=8000):
     server_address = ('', port)
     httpd = HTTPServer(server_address, RequestHandler)
-    print(f'Starting server on port {port}...')
+    print(f'\n=== Starting Backend Server ===')
+    print(f'Server address: {server_address}')
+    print(f'UART port: {uart.port}')
+    print(f'UART baudrate: {uart.baudrate}')
+    print('==============================\n')
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("Shutting down server...")
+        print("\n=== Shutting down server ===")
+        httpd.server_close()
+        uart.stop()
+    except Exception as e:
+        print(f"\n!!! SERVER ERROR !!!")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
         httpd.server_close()
         uart.stop()
 
