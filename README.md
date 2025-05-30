@@ -588,6 +588,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
 
             elif self.path == '/savemainconfig':
+                global mode_state, boiler_discharge, barista_light, cup_warmer
                 print("\n=== Processing Main Config Save (Mode, Eco, etc.) ===")
                 print(f"Config: {json.dumps(params.get('config', {}), indent=2)}")
                 new_config = params.get('config', {})
@@ -599,9 +600,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                     discharge_map = {'none': 0, 'drain_refill': 1, 'drain_shutdown': 2}
                     boiler_discharge = discharge_map.get(new_config['boiler_discharge'], 0)
                 if 'barista_light' in new_config:
-                    barista_light = int(new_config['barista_light'])
+                    if isinstance(new_config['barista_light'], dict):
+                        barista_light = int(new_config['barista_light'].get('percentage', 0)) if new_config['barista_light'].get('enabled', False) else 0
+                    else:
+                        barista_light = int(new_config['barista_light'])
                 if 'cup_warmer' in new_config:
-                    cup_warmer = int(new_config['cup_warmer'])
+                    if isinstance(new_config['cup_warmer'], dict):
+                        cup_warmer = int(new_config['cup_warmer'].get('percentage', 0)) if new_config['cup_warmer'].get('enabled', False) else 0
+                    else:
+                        cup_warmer = int(new_config['cup_warmer'])
                 # After updating, send flag 4 UART
                 send_system_status_uart()
                 self.send_response(200)
