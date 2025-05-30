@@ -173,14 +173,14 @@ def handle_uart_message(flag: int, values: list):
             config.GH1_ACTIVATION_FLAG = int(values[0])
             print(f"Set GH1_ACTIVATION_FLAG to {config.GH1_ACTIVATION_FLAG}")
             if int(values[0]) == 1:
-                print("Starting GH1 extraction timer")
+                config.HGP1ACTIVE = 1
                 config.start_gh_timer(1, config.HGP1ExtractionTime)
         elif flag == 14:  # GH2 extraction start
             print(f"Received flag 14 with values: {values}")
             config.GH2_ACTIVATION_FLAG = int(values[0])
             print(f"Set GH2_ACTIVATION_FLAG to {config.GH2_ACTIVATION_FLAG}")
             if int(values[0]) == 1:
-                print("Starting GH2 extraction timer")
+                config.HGP2ACTIVE = 1
                 config.start_gh_timer(2, config.HGP2ExtractionTime)
     except Exception as e:
         print(f"Error handling UART message: {e}")
