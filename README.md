@@ -164,6 +164,7 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
     function handleSaveChanges() {
         console.log('Saving changes with config:', config);
         console.log('Current amperId:', _amperId);
+        console.log('Current pre-infusion data:', currentConfig?.pre_infusion);
         
         // Update local state
         changeAmperConfig(`GH${_amperId}`, 'boilerTemperator', config.temperature);
@@ -173,13 +174,17 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
         changeAmperConfig(`GH${_amperId}`, 'purge', config.purge);
         changeAmperConfig(`GH${_amperId}`, 'backflush', config.backflush);
 
-        // Build save data, but preserve pre-infusion data from currentConfig
+        // Get the current pre-infusion data from the backend config
+        const currentPreInfusion = currentConfig?.pre_infusion;
+        console.log('Current pre-infusion from backend:', currentPreInfusion);
+
+        // Build save data, ensuring we preserve the existing pre-infusion data
         const saveData = {
             temperature: Math.round(config.temperature * 10),
-            // Use pre-infusion data from currentConfig if available, otherwise use current state
-            pre_infusion: currentConfig?.pre_infusion || {
-                enabled: config.preInfusionEnabled,
-                time: config.preInfusionTime
+            // Always use the current pre-infusion data from the backend
+            pre_infusion: currentPreInfusion || {
+                enabled: false,
+                time: 0
             },
             extraction_time: config.extractionTime,
             volume: config.volume,
