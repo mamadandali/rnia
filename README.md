@@ -164,28 +164,43 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
     function handleSaveChanges() {
         console.log('Saving changes with config:', config);
         console.log('Current amperId:', _amperId);
-        console.log('Current pre-infusion data:', currentConfig?.pre_infusion);
+        console.log('Current config from backend:', currentConfig);
+        console.log('Selected GH config:', _selectedGh?.config);
         
         // Update local state
         changeAmperConfig(`GH${_amperId}`, 'boilerTemperator', config.temperature);
         changeAmperConfig(`GH${_amperId}`, 'volume', config.volume);
         changeAmperConfig(`GH${_amperId}`, 'extractionTime', config.extractionTime);
-        // Don't update pre-infusion data here - it should only be updated by the modal
         changeAmperConfig(`GH${_amperId}`, 'purge', config.purge);
         changeAmperConfig(`GH${_amperId}`, 'backflush', config.backflush);
 
-        // Get the current pre-infusion data from the backend config
-        const currentPreInfusion = currentConfig?.pre_infusion;
-        console.log('Current pre-infusion from backend:', currentPreInfusion);
+        // Determine the pre-infusion data to use
+        let preInfusionData;
+        if (currentConfig?.pre_infusion) {
+            // Use the pre-infusion data from the backend if available
+            preInfusionData = currentConfig.pre_infusion;
+            console.log('Using pre-infusion from backend:', preInfusionData);
+        } else if (_selectedGh?.config?.preInfusion !== undefined) {
+            // Convert legacy format if available
+            const legacyValue = _selectedGh.config.preInfusion;
+            preInfusionData = {
+                enabled: legacyValue > 0,
+                time: legacyValue
+            };
+            console.log('Converted legacy pre-infusion:', preInfusionData);
+        } else {
+            // Fall back to current state
+            preInfusionData = {
+                enabled: config.preInfusionEnabled,
+                time: config.preInfusionTime
+            };
+            console.log('Using current state for pre-infusion:', preInfusionData);
+        }
 
-        // Build save data, ensuring we preserve the existing pre-infusion data
+        // Build save data
         const saveData = {
             temperature: Math.round(config.temperature * 10),
-            // Always use the current pre-infusion data from the backend
-            pre_infusion: currentPreInfusion || {
-                enabled: false,
-                time: 0
-            },
+            pre_infusion: preInfusionData,
             extraction_time: config.extractionTime,
             volume: config.volume,
             pressure: 9.0,
@@ -195,15 +210,12 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
         };
         console.log('Saving to backend with data:', saveData);
 
-        // Save to backend directly with correct group head
+        // Save to backend
         saveGHConfig((`gh${_amperId}` as 'gh1' | 'gh2'), saveData);
 
-        // Optionally notify parent
         if (onSave) {
             console.log('Calling onSave with config:', config);
             onSave(config);
-        } else {
-            console.warn('onSave prop is not provided');
         }
 
         toast.success('Configuration saved successfully.');
