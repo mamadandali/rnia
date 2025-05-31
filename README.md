@@ -495,95 +495,130 @@ class RequestHandler(BaseHTTPRequestHandler):
 
             elif self.path == '/saveghconfig':
                 print("\n=== Processing GH Config Save ===")
-                print(f"GH ID: {params.get('gh_id')}")
-                print(f"Raw config data: {json.dumps(params.get('config', {}), indent=2)}")
-                new_config = params.get('config', {})
-                gh_id = params.get('gh_id', 'ghundefined')
+                print("Request headers:", dict(self.headers))
+                print("Content length:", self.headers.get('Content-Length'))
+                print("Content type:", self.headers.get('Content-Type'))
+                
+                try:
+                    content_length = int(self.headers['Content-Length'])
+                    post_data = self.rfile.read(content_length).decode('utf-8')
+                    print(f"Raw POST data: {post_data}")
+                    params = json.loads(post_data)
+                    print(f"Parsed POST data: {json.dumps(params, indent=2)}")
+                    
+                    if not params or 'gh_id' not in params or 'config' not in params:
+                        print("!!! Invalid request data !!!")
+                        print("Missing required fields: gh_id or config")
+                        self.send_response(400)
+                        self.send_header('Content-type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({'error': 'Missing required fields'}).encode())
+                        return
+                        
+                    print(f"GH ID: {params.get('gh_id')}")
+                    print(f"Raw config data: {json.dumps(params.get('config', {}), indent=2)}")
+                    new_config = params.get('config', {})
+                    gh_id = params.get('gh_id', 'ghundefined')
 
-                # Log the current pre-infusion state before update
-                if gh_id == 'gh1':
-                    print("\nCurrent GH1 pre-infusion state:", config.gh1_config['pre_infusion'])
-                elif gh_id == 'gh2':
-                    print("\nCurrent GH2 pre-infusion state:", config.gh2_config['pre_infusion'])
+                    # Log the current pre-infusion state before update
+                    if gh_id == 'gh1':
+                        print("\nCurrent GH1 pre-infusion state:", config.gh1_config['pre_infusion'])
+                    elif gh_id == 'gh2':
+                        print("\nCurrent GH2 pre-infusion state:", config.gh2_config['pre_infusion'])
 
-                # Handle pre-infusion data consistently
-                preinf_data = new_config.get('pre_infusion', {})
-                print("\nReceived pre-infusion data:", preinf_data)
-                if isinstance(preinf_data, dict):
-                    # If it's a dict, preserve both enabled state and time
-                    preinf = {
-                        "enabled": bool(preinf_data.get('enabled', False)),
-                        "time": int(preinf_data.get('time', 0))
-                    }
-                    print("Converted to pre-infusion dict:", preinf)
-                else:
-                    # If it's just a number (backward compatibility), convert to dict format
-                    preinf_time = int(preinf_data)
-                    preinf = {
-                        "enabled": preinf_time > 0,
-                        "time": preinf_time
-                    }
-                    print("Converted legacy format to pre-infusion dict:", preinf)
+                    # Handle pre-infusion data consistently
+                    preinf_data = new_config.get('pre_infusion', {})
+                    print("\nReceived pre-infusion data:", preinf_data)
+                    if isinstance(preinf_data, dict):
+                        # If it's a dict, preserve both enabled state and time
+                        preinf = {
+                            "enabled": bool(preinf_data.get('enabled', False)),
+                            "time": int(preinf_data.get('time', 0))
+                        }
+                        print("Converted to pre-infusion dict:", preinf)
+                    else:
+                        # If it's just a number (backward compatibility), convert to dict format
+                        preinf_time = int(preinf_data)
+                        preinf = {
+                            "enabled": preinf_time > 0,
+                            "time": preinf_time
+                        }
+                        print("Converted legacy format to pre-infusion dict:", preinf)
 
-                if gh_id == 'gh1':
-                    extraction_time = int(new_config.get('extraction_time', config.gh1_config['extraction_time']))
-                    ext_volume = new_config.get('extraction_volume', new_config.get('volume', config.gh1_config['extraction_volume']))
-                    config.gh1_config.update({
-                        "temperature": float(new_config.get('temperature', config.gh1_config['temperature'])),
-                        "extraction_volume": int(ext_volume),
-                        "extraction_time": extraction_time,
-                        "pre_infusion": preinf,  # Store as dict with enabled state and time
-                        "purge": int(new_config.get('purge', config.gh1_config['purge'])),
-                        "backflush": bool(new_config.get('backflush', config.gh1_config['backflush']))
-                    })
-                    print("\nUpdated GH1 pre-infusion state:", config.gh1_config['pre_infusion'])
-                    config.HGP1ExtractionTime = extraction_time
-                    send_gh_uart(1, config.gh1_config)
-                    last_gh1_data = [
-                        int(round(config.gh1_config['temperature'])),
-                        int(round(config.gh1_config['extraction_volume'])),
-                        int(round(config.gh1_config['extraction_time'])),
-                        int(round(config.gh1_config['purge'])),
-                        1 if config.gh1_config['pre_infusion']['enabled'] else 0,
-                        int(round(config.gh1_config['pre_infusion']['time']))
-                    ]
-                elif gh_id == 'gh2':
-                    extraction_time = int(new_config.get('extraction_time', config.gh2_config['extraction_time']))
-                    ext_volume = new_config.get('extraction_volume', new_config.get('volume', config.gh2_config['extraction_volume']))
-                    config.gh2_config.update({
-                        "temperature": float(new_config.get('temperature', config.gh2_config['temperature'])),
-                        "extraction_volume": int(ext_volume),
-                        "extraction_time": extraction_time,
-                        "pre_infusion": preinf,  # Store as dict with enabled state and time
-                        "purge": int(new_config.get('purge', config.gh2_config['purge'])),
-                        "backflush": bool(new_config.get('backflush', config.gh2_config['backflush']))
-                    })
-                    print("\nUpdated GH2 pre-infusion state:", config.gh2_config['pre_infusion'])
-                    config.HGP2ExtractionTime = extraction_time
-                    send_gh_uart(2, config.gh2_config)
-                    last_gh2_data = [
-                        int(round(config.gh2_config['temperature'])),
-                        int(round(config.gh2_config['extraction_volume'])),
-                        int(round(config.gh2_config['extraction_time'])),
-                        int(round(config.gh2_config['purge'])),
-                        1 if config.gh2_config['pre_infusion']['enabled'] else 0,
-                        int(round(config.gh2_config['pre_infusion']['time']))
-                    ]
+                    if gh_id == 'gh1':
+                        extraction_time = int(new_config.get('extraction_time', config.gh1_config['extraction_time']))
+                        ext_volume = new_config.get('extraction_volume', new_config.get('volume', config.gh1_config['extraction_volume']))
+                        config.gh1_config.update({
+                            "temperature": float(new_config.get('temperature', config.gh1_config['temperature'])),
+                            "extraction_volume": int(ext_volume),
+                            "extraction_time": extraction_time,
+                            "pre_infusion": preinf,  # Store as dict with enabled state and time
+                            "purge": int(new_config.get('purge', config.gh1_config['purge'])),
+                            "backflush": bool(new_config.get('backflush', config.gh1_config['backflush']))
+                        })
+                        print("\nUpdated GH1 pre-infusion state:", config.gh1_config['pre_infusion'])
+                        config.HGP1ExtractionTime = extraction_time
+                        send_gh_uart(1, config.gh1_config)
+                        last_gh1_data = [
+                            int(round(config.gh1_config['temperature'])),
+                            int(round(config.gh1_config['extraction_volume'])),
+                            int(round(config.gh1_config['extraction_time'])),
+                            int(round(config.gh1_config['purge'])),
+                            1 if config.gh1_config['pre_infusion']['enabled'] else 0,
+                            int(round(config.gh1_config['pre_infusion']['time']))
+                        ]
+                    elif gh_id == 'gh2':
+                        extraction_time = int(new_config.get('extraction_time', config.gh2_config['extraction_time']))
+                        ext_volume = new_config.get('extraction_volume', new_config.get('volume', config.gh2_config['extraction_volume']))
+                        config.gh2_config.update({
+                            "temperature": float(new_config.get('temperature', config.gh2_config['temperature'])),
+                            "extraction_volume": int(ext_volume),
+                            "extraction_time": extraction_time,
+                            "pre_infusion": preinf,  # Store as dict with enabled state and time
+                            "purge": int(new_config.get('purge', config.gh2_config['purge'])),
+                            "backflush": bool(new_config.get('backflush', config.gh2_config['backflush']))
+                        })
+                        print("\nUpdated GH2 pre-infusion state:", config.gh2_config['pre_infusion'])
+                        config.HGP2ExtractionTime = extraction_time
+                        send_gh_uart(2, config.gh2_config)
+                        last_gh2_data = [
+                            int(round(config.gh2_config['temperature'])),
+                            int(round(config.gh2_config['extraction_volume'])),
+                            int(round(config.gh2_config['extraction_time'])),
+                            int(round(config.gh2_config['purge'])),
+                            1 if config.gh2_config['pre_infusion']['enabled'] else 0,
+                            int(round(config.gh2_config['pre_infusion']['time']))
+                        ]
 
-                print("\nFinal Group Head Configurations:")
-                print("--------------------------------")
-                print("Group Head 1:")
-                print(json.dumps(config.gh1_config, indent=2))
-                print("\nGroup Head 2:")
-                print(json.dumps(config.gh2_config, indent=2))
-                print("--------------------------------\n")
+                    print("\nFinal Group Head Configurations:")
+                    print("--------------------------------")
+                    print("Group Head 1:")
+                    print(json.dumps(config.gh1_config, indent=2))
+                    print("\nGroup Head 2:")
+                    print(json.dumps(config.gh2_config, indent=2))
+                    print("--------------------------------\n")
 
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': True}).encode())
-                return
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({'success': True}).encode())
+                    return
+
+                except Exception as e:
+                    print(f"\n!!! ERROR in POST request handling !!!")
+                    print(f"Error type: {type(e).__name__}")
+                    print(f"Error message: {str(e)}")
+                    print(f"Request path: {self.path}")
+                    print(f"Request headers: {dict(self.headers)}")
+                    import traceback
+                    print(f"Traceback: {traceback.format_exc()}")
+                    self.send_response(500)
+                    self.send_header('Content-type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({'error': str(e)}).encode())
 
             elif self.path == '/setstatusupdate':
                 print("\n=== Processing Button State Update ===")
