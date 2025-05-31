@@ -503,9 +503,11 @@ class RequestHandler(BaseHTTPRequestHandler):
 
                 if gh_id == 'gh1':
                     extraction_time = int(new_config.get('extraction_time', config.gh1_config['extraction_time']))
+                    # Get extraction volume from either 'extraction_volume' or 'volume' key
+                    ext_volume = new_config.get('extraction_volume', new_config.get('volume', config.gh1_config['extraction_volume']))
                     config.gh1_config.update({
                         "temperature": float(new_config.get('temperature', config.gh1_config['temperature'])),
-                        "extraction_volume": int(new_config.get('extraction_volume', config.gh1_config['extraction_volume'])),
+                        "extraction_volume": int(ext_volume),
                         "extraction_time": extraction_time,
                         "pre_infusion": preinf_time,
                         "purge": int(new_config.get('purge', config.gh1_config['purge'])),
@@ -523,9 +525,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                     ]
                 elif gh_id == 'gh2':
                     extraction_time = int(new_config.get('extraction_time', config.gh2_config['extraction_time']))
+                    # Get extraction volume from either 'extraction_volume' or 'volume' key
+                    ext_volume = new_config.get('extraction_volume', new_config.get('volume', config.gh2_config['extraction_volume']))
                     config.gh2_config.update({
                         "temperature": float(new_config.get('temperature', config.gh2_config['temperature'])),
-                        "extraction_volume": int(new_config.get('extraction_volume', config.gh2_config['extraction_volume'])),
+                        "extraction_volume": int(ext_volume),
                         "extraction_time": extraction_time,
                         "pre_infusion": preinf_time,
                         "purge": int(new_config.get('purge', config.gh2_config['purge'])),
