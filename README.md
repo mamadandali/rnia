@@ -1,622 +1,776 @@
-import React, { useState, useEffect } from 'react'
-import { MdArrowDropDown, MdArrowDropUp } from 'react-icons/md';
-// import { } from 'react-router-dom';
-import { Button } from '~/components/KIT';
-// import { Amper } from '~/components/common';
-import HoldableButton from '~/components/common/holdableButton';
-import { motion } from 'framer-motion';
-import { BLOCK_ANIMATIONS_VARIANTS, ROUTE_VARIANTS } from '~/store/animationVars';
-import { useGeneralStore } from '~/store/general';
-import { MACHINE_KEY } from '~/store/consts';
-import { toast } from 'react-hot-toast';
-import NewAmper from '~/components/common/newAmper';
-import { useTranslation } from 'react-i18next';
-import PreInfusionModal from '~/components/common/PreInfusionModal';
-import { useConfigData } from '~/hooks/useConfigData';
-import MyModal from '~/components/KIT/Modal';
-// import { PRESURE } from '~/store/constants';
-import axios from 'axios';
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any
+from urllib.parse import parse_qs
+import json
+import threading
+import time
+import logging
+import sys
+from uart_comm import UARTCommunicator
 
+# Configure logging to print to both file and console
+logging.basicConfig(
+    level=logging.DEBUG,  # Change to DEBUG level
+    format='%(asctime)s - %(levelname)s - %(message)s',  # Add timestamp and level
+    handlers=[
+        logging.FileHandler('backend.log', mode='a'),  # Append mode instead of write
+        logging.StreamHandler(sys.stdout)  # Print to console
+    ]
+)
+logger = logging.getLogger(__name__)
 
-const headGroupTitle: {
-    [key: number]: string
-} = {
-    1: '',
-    2: ''
-}
-
-interface Props {
-  onSave?: (config: any) => void;
-  currentConfig?: any;
-}
-
-const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
-    const { t } = useTranslation();
-    const { [MACHINE_KEY]: machine, changeAmperConfig, changeCurrentPage, CURRENT_PAGE } = useGeneralStore();
-    const _amperId = CURRENT_PAGE.params.amperId || '1'
-    // const navigate = useNavigate();
-    // console.log(changeAmperConfig)
-    // const params = useParams();
-    const _selectedGh = _amperId === '1' ? machine.GH1 : machine.GH2
-    const { saveGHConfig, fetchGHConfig, ghConfig } = useConfigData();
-    const [currentPressure, setCurrentPressure] = useState(0);
-    const [isPreInfusionModalOpen, setIsPreInfusionModalOpen] = React.useState(false);
-    const [isBackflushModalOpen, setIsBackflushModalOpen] = React.useState(false);
-    const [backflushValue, setBackflushValue] = React.useState(false);
-
-    // Helper function to get pre-infusion data
-    const getPreInfusionData = (config: any) => {
-        console.log('getPreInfusionData input:', config);
-        // Always try to get the new format first
-        if (config?.pre_infusion && typeof config.pre_infusion === 'object') {
-            const result = {
-                enabled: Boolean(config.pre_infusion.enabled),
-                time: Number(config.pre_infusion.time) || 0
-            };
-            console.log('getPreInfusionData returning dict format:', result);
-            return result;
+class Config:
+    def __init__(self):
+        # Sensor values
+        self.sensors = {
+            "MainTankWaterLevel": 0.0,
+            "HeadGP1WaterLevel": 0.0,
+            "HeadGP2WaterLevel": 0.0,
+            "MainTankTemp": 0.0,
+            "HeadGP1TopTemp": 0.0,
+            "HeadGP1BottomTemp": 0.0,
+            "HeadGP2TopTemp": 0.0,
+            "HeadGP2BottomTemp": 0.0,
+            "Pressure": 0.0,
+            "MainTankWaterFlow": 0.0,
+            "HeadGP1WaterFlow": 0.0,
+            "HeadGP2WaterFlow": 0.0,
+            "Current": 0.0,
+            "Voltage": 0.0
         }
-        // Fallback to legacy format
-        const legacyPreInfusion = config?.preInfusion || _selectedGh.config.preInfusion || 0;
-        const result = {
-            enabled: Number(legacyPreInfusion) > 0,
-            time: Number(legacyPreInfusion) || 0
-        };
-        console.log('getPreInfusionData returning legacy format:', result);
-        return result;
-    };
-
-    const [config, setConfig] = useState(() => {
-        console.log('Initializing config with currentConfig:', currentConfig);
-        const preInfusion = getPreInfusionData(currentConfig);
-        const initialConfig = {
-            temperature: currentConfig?.temperature || _selectedGh.config.boilerTemperator,
-            preInfusionEnabled: preInfusion.enabled,
-            preInfusionTime: preInfusion.time,
-            extractionTime: currentConfig?.extraction_time || _selectedGh.config.extractionTime,
-            volume: currentConfig?.volume || _selectedGh.config.volume,
-            purge: currentConfig?.purge || 0,
-            backflush: currentConfig?.backflush || false
-        };
-        console.log('Initial config state:', initialConfig);
-        return initialConfig;
-    });
-
-    // Fetch latest config when component mounts
-    useEffect(() => {
-        const fetchLatestConfig = async () => {
-            console.log('Fetching latest config on mount...');
-            await fetchGHConfig();
-            const ghId = `gh${_amperId}` as 'gh1' | 'gh2';
-            const latestConfig = ghConfig?.[ghId];
-            
-            if (latestConfig) {
-                console.log('Latest config from backend:', latestConfig);
-                // Get pre-infusion data directly from the backend response
-                const preInfusion = latestConfig.pre_infusion || { enabled: false, time: 0 };
-                console.log('Pre-infusion data from backend:', preInfusion);
-                
-                setConfig(prev => ({
-                    ...prev,
-                    temperature: latestConfig.temperature,
-                    preInfusionEnabled: Boolean(preInfusion.enabled),
-                    preInfusionTime: Number(preInfusion.time),
-                    extractionTime: latestConfig.extraction_time,
-                    volume: latestConfig.volume,
-                    purge: latestConfig.purge,
-                    backflush: latestConfig.backflush
-                }));
-            }
-        };
-
-        fetchLatestConfig();
-    }, [_amperId]); // Only run on mount and when _amperId changes
-
-    // Update config when currentConfig changes (this is now a backup)
-    useEffect(() => {
-        if (currentConfig) {
-            console.log('currentConfig changed:', currentConfig);
-            // Get pre-infusion data directly from currentConfig
-            const preInfusion = currentConfig.pre_infusion || { enabled: false, time: 0 };
-            console.log('Pre-infusion data from currentConfig:', preInfusion);
-            
-            setConfig(prev => ({
-                ...prev,
-                temperature: currentConfig.temperature,
-                preInfusionEnabled: Boolean(preInfusion.enabled),
-                preInfusionTime: Number(preInfusion.time),
-                extractionTime: currentConfig.extraction_time,
-                volume: currentConfig.volume,
-                purge: currentConfig.purge,
-                backflush: currentConfig.backflush
-            }));
-        }
-    }, [currentConfig]);
-
-    // Fetch pressure data from /getdata endpoint
-    useEffect(() => {
-        const fetchPressureData = async () => {
-            try {
-                const response = await axios.get('http://localhost:8000/getdata');
-                const data = response.data;
-                setCurrentPressure(_amperId === '1' ? data.PressureGPH1 : data.PressureGPH2);
-            } catch (err) {
-                console.error('Error fetching pressure data:', err);
-            }
-        };
-
-        // Initial fetch
-        fetchPressureData();
-
-        // Set up polling every second
-        const interval = setInterval(fetchPressureData, 1000);
-
-        // Cleanup
-        return () => clearInterval(interval);
-    }, [_amperId]);
-
-    function handleIncreaseTemp() {
-        if (config.temperature >= 200) return // Assuming max temp is 200
-        setConfig(prev => ({ ...prev, temperature: prev.temperature + 0.5 }));
-    }
-    function handleDecreaseTemp() {
-        if (config.temperature <= 0) return // Assuming min temp is 0
-        setConfig(prev => ({ ...prev, temperature: prev.temperature - 0.5 }));
-    }
-    // function handleIncreasePresure() {
-    //     if (presure === PRESURE.MAX) return
-    //     setPresure(prev => prev + 1);
-    // }
-    // function handleDecreasePresure() {
-    //     if (presure === PRESURE.MIN) return
-    //     setPresure(prev => prev - 1);
-    // }
-
-    function handleIncreaseVolume() {
-        // if (temperature === 30) return
-        setConfig(prev => ({ ...prev, volume: prev.volume + 1 }));
-    }
-    function handleDecreaseVolume() {
-        if (config.volume === 0) return
-        setConfig(prev => ({ ...prev, volume: prev.volume - 1 }));
-    }
-    function handleIncreaseTime() {
-        // if (time === 200) return
-        setConfig(prev => ({ ...prev, extractionTime: prev.extractionTime + 1 }));
-    }
-    function handleDecreaseTime() {
-        if (config.extractionTime === 0) return
-        setConfig(prev => ({ ...prev, extractionTime: prev.extractionTime - 1 }));
-    }
-    function handleIncreasePurge() {
-        setConfig(prev => ({ ...prev, purge: prev.purge + 1 }));
-    }
-    function handleDecreasePurge() {
-        if (config.purge === 0) return;
-        setConfig(prev => ({ ...prev, purge: prev.purge - 1 }));
-    }
-    const handleSaveChanges = async () => {
-        // First, fetch the latest config to ensure we have the most up-to-date data
-        await fetchGHConfig();
         
-        // Get the latest config for the current group head
-        const ghId = `gh${_amperId}` as 'gh1' | 'gh2';
-        const latestConfig = ghConfig?.[ghId];
-        
-        console.log('Saving changes with config:', {
-            localConfig: config,
-            latestConfig,
-            ghConfig
-        });
-
-        // Build the save data using the local state values
-        const saveData = {
-            temperature: Math.round(config.temperature * 10),
-            pre_infusion: {
-                enabled: Boolean(config.preInfusionEnabled),
-                time: Number(config.preInfusionTime)
+        # Group Head 1 Configuration
+        self.gh1_config = {
+            "temperature": 91.0,
+            "extraction_volume": 0,
+            "extraction_time": 20,
+            "pre_infusion": {
+                "enabled": False,
+                "time": 0
             },
-            extraction_time: Number(config.extractionTime),
-            volume: Number(config.volume),
-            pressure: 9.0,
-            flow: 2.5,
-            backflush: Boolean(config.backflush),
-            purge: Number(config.purge)
-        };
+            "purge": 0,
+            "backflush": False
+        }
+        
+        # Group Head 2 Configuration
+        self.gh2_config = {
+            "temperature": 92.0,
+            "extraction_volume": 0,
+            "extraction_time": 20,
+            "pre_infusion": {
+                "enabled": False,
+                "time": 0
+            },
+            "purge": 0,
+            "backflush": False
+        }
+        
+        # System states
+        self.FLOWGPH1CGF = 0.0
+        self.FLOWGPH2CGF = 0.0
+        self.tempMainTankFlag = True
+        self.tempHeadGP1Flag = True
+        self.tempHeadGP2Flag = True
+        self.enableHeadGP1 = True
+        self.enableHeadGP2 = True
+        self.enableMainTank = True
+        self.Pressure1 = 0.0
+        self.Pressure2 = 0.0
+        
+        # UI settings
+        self.HGP1FlowVolume = 0
+        self.HGP2FlowVolume = 0
+        self.HGP1PreInfusion = 0
+        self.HGP2PreInfusion = 0
+        self.HGP1ExtractionTime = 20
+        self.HGP2ExtractionTime = 20
+        self.tempMainTankSetPoint = 110.0
+        self.tempHeadGP1SetPoint = 114.0
+        self.tempHeadGP2SetPoint = 92.0
+        
+        # Additional features
+        self.tempCupFlag = False
+        self.cup = 0
+        self.baristaLight = False
+        self.light = 0
+        self.ecomode = 0
+        self.dischargeMode = 0
+        
+        # System states
+        self.mainTankState = 1
+        self.HGP1State = 1
+        self.HGP2State = 1
+        self.HGP1ACTIVE = 0
+        self.HGP2ACTIVE = 0
+        self.HGP12MFlag = 4
+        self.sebar = 0
+        self.HGPCheckStatus = False
+        self.backflush1 = 4
+        self.backflush2 = 4
+        
+        # Timer for GH activation reset
+        self.gh1_timer = None
+        self.gh2_timer = None
+        
+        # Extraction process flags
+        self.gh1_extraction_in_progress = False
+        self.gh2_extraction_in_progress = False
 
-        console.log('Saving to backend with data:', saveData);
-        await saveGHConfig(ghId, saveData);
-        toast.success(t('configuration_saved_successfully'));
-    };
-    // useEffect(() => {
-    //     if (machine) {
+        # GH Activation flags (13 for GH1, 14 for GH2)
+        self.GH1_ACTIVATION_FLAG = 0  # 0 = not running, 1 = running
+        self.GH2_ACTIVATION_FLAG = 0  # 0 = not running, 1 = running
+
+        # Main ampere configuration
+        self.mainAmpereConfig = {
+            "temperature": 125.0,
+            "pressure": 9.0
+        }
+        
+        # Pressure configuration
+        self.pressureConfig = {
+            "pressure": 9.0,
+            "max_pressure": 12.0,
+            "min_pressure": 0.0
+        }
+        
+        print("Configuration initialized")
+
+    def start_gh_timer(self, gh_number, extraction_time):
+        """Start a timer to reset GH activation after extraction time"""
+        if gh_number == 1:
+            if self.gh1_timer:
+                self.gh1_timer.cancel()
+            self.gh1_extraction_in_progress = True
+            self.gh1_timer = threading.Timer(extraction_time + 5, self.reset_gh_active, args=[1])
+            self.gh1_timer.start()
+        elif gh_number == 2:
+            if self.gh2_timer:
+                self.gh2_timer.cancel()
+            self.gh2_extraction_in_progress = True
+            self.gh2_timer = threading.Timer(extraction_time + 5, self.reset_gh_active, args=[2])
+            self.gh2_timer.start()
+
+    def reset_gh_active(self, gh_number):
+        """Reset GH activation flag"""
+        if gh_number == 1:
+            self.HGP1ACTIVE = 0
+            self.gh1_extraction_in_progress = False
+            print(f"Automatically reset HGP1ACTIVE to 0 after extraction")
+        elif gh_number == 2:
+            self.HGP2ACTIVE = 0
+            self.gh2_extraction_in_progress = False
+            print(f"Automatically reset HGP2ACTIVE to 0 after extraction")
+
+# Add global timestamps for extraction start
+last_gh1_start = 0
+last_gh2_start = 0
+
+def handle_uart_message(flag: int, values: list):
+    global last_gh1_start, last_gh2_start
+    print(f"handle_uart_message called with flag={flag}, values={values}")
+    try:
+        if flag == 8:  # Main boiler temperature
+            config.sensors["MainTankTemp"] = values[0] / 10  # Convert back to decimal
+        elif flag == 9:  # GH1 status
+            config.sensors["HeadGP1TopTemp"] = values[0] / 10
+            config.Pressure1 = values[1]
+            config.FLOWGPH1CGF = values[2]
+        elif flag == 10:  # GH2 status
+            config.sensors["HeadGP2TopTemp"] = values[0] / 10
+            config.Pressure2 = values[1]
+            config.FLOWGPH2CGF = values[2]
+        elif flag == 13:  # GH1 extraction start/stop
+            now = time.time()
+            print(f"Received flag 13 with values: {values} at {now}")
+            if int(values[0]) == 1:
+                if not config.gh1_extraction_in_progress:
+                    print("Starting GH1 extraction timer")
+                    config.HGP1ACTIVE = 1
+                    config.start_gh_timer(1, config.HGP1ExtractionTime)
+                    last_gh1_start = now
+                else:
+                    print("GH1 extraction already in progress, ignoring repeated start")
+            elif int(values[0]) == 0:
+                # Only allow stop if at least 2 seconds have passed since start
+                if config.gh1_extraction_in_progress and (now - last_gh1_start > 2):
+                    print("Received GH1 extraction stop (13;0), setting HGP1ACTIVE=0")
+                    config.HGP1ACTIVE = 0
+                    config.gh1_extraction_in_progress = False
+                else:
+                    print("Ignoring spurious GH1 stop")
+        elif flag == 14:  # GH2 extraction start/stop
+            now = time.time()
+            print(f"Received flag 14 with values: {values} at {now}")
+            if int(values[0]) == 1:
+                if not config.gh2_extraction_in_progress:
+                    print("Starting GH2 extraction timer")
+                    config.HGP2ACTIVE = 1
+                    config.start_gh_timer(2, config.HGP2ExtractionTime)
+                    last_gh2_start = now
+                else:
+                    print("GH2 extraction already in progress, ignoring repeated start")
+            elif int(values[0]) == 0:
+                if config.gh2_extraction_in_progress and (now - last_gh2_start > 2):
+                    print("Received GH2 extraction stop (14;0), setting HGP2ACTIVE=0")
+                    config.HGP2ACTIVE = 0
+                    config.gh2_extraction_in_progress = False
+                else:
+                    print("Ignoring spurious GH2 stop")
+    except Exception as e:
+        print(f"Error handling UART message: {e}")
+
+# Create global config instance
+config = Config()
+
+# Initialize UART communication
+print("\n=== Starting Backend Server ===")
+print("Initializing UART communication...")
+uart = UARTCommunicator(port='/dev/ttyAMA0')
+uart.set_message_callback(handle_uart_message)
+try:
+    print("\n=== Initializing UART Communication ===")
+    print("Port: /dev/ttyAMA0")
+    print("Baudrate: 9600")
+    uart.start()
+    print("UART initialization completed successfully")
+except Exception as e:
+    print(f"\n!!! UART INITIALIZATION ERROR !!!")
+    print(f"Error type: {type(e).__name__}")
+    print(f"Error message: {str(e)}")
+    import traceback
+    print(f"Traceback: {traceback.format_exc()}")
+    print("====================================\n")
+
+# Initialize system status variables
+print("Initializing system status variables...")
+
+# System status variables
+mode_state = 0  # 0=off, 1=eco, 2=sleep
+boiler_discharge = 0  # 0=nothing, 1=drain&refill, 2=drain&shutdown
+barista_light = 0  # 0-100 percentage
+cup_warmer = 0  # 0-100 percentage
+discharge_timer = None
+
+# Button and UART state variables
+main_boiler_state = 0  # 0 = off, 1 = on
+gh1_button_state = 0  # 0 = off, 1 = on
+gh2_button_state = 0  # 0 = off, 1 = on
+
+# State tracking variables
+last_main_data = [0, 0, 0, 9, 230]  # Initialize with default values
+last_gh1_data = None
+last_gh2_data = None
+
+def send_gh_uart(flag, cfg):
+    """Send group head configuration"""
+    print(f"\n=== Sending GH{flag} UART Message ===")
+    print(f"Configuration: {json.dumps(cfg, indent=2)}")
+    uart.send_gh_config(flag, cfg)
+    print(f"=== GH{flag} UART Message Sent ===\n")
+
+def send_main_uart():
+    """Send main status UART message"""
+    print("\n=== Attempting to Send Main UART Message ===")
+    try:
+        pressure = int(round(config.pressureConfig['pressure']))
+        main_temp = int(round(config.mainAmpereConfig['temperature']))
+        
+        print("Current states:")
+        print(f"Main boiler state: {main_boiler_state}")
+        print(f"GH1 button state: {gh1_button_state}")
+        print(f"GH2 button state: {gh2_button_state}")
+        print(f"Pressure: {pressure}")
+        print(f"Main temp: {main_temp}")
+        
+        print("\nLast main data:", last_main_data)
+        new_main = [main_boiler_state, gh1_button_state, gh2_button_state, pressure, main_temp]
+        print("New main data:", new_main)
+        
+        if last_main_data != new_main:
+            print("State changed, sending UART message...")
+            uart.send_main_status(main_boiler_state, gh1_button_state, gh2_button_state, pressure, main_temp)
+            print("=== Main UART Message Sent ===\n")
+        else:
+            print("No state change, skipping UART message")
+    except Exception as e:
+        print(f"\n!!! Error in send_main_uart !!!")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        print("==============================\n")
+
+def send_system_status_uart():
+    """Send system status UART message"""
+    print("\n=== Sending System Status UART Message ===")
+    print(f"Mode: {mode_state}")
+    print(f"Discharge: {boiler_discharge}")
+    print(f"Light: {barista_light}")
+    print(f"Cup warmer: {cup_warmer}")
+    uart.send_system_status(mode_state, boiler_discharge, barista_light, cup_warmer)
+    print("=== System Status UART Message Sent ===\n")
+
+class RequestHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        # Enable HTTP request logging
+        print(f"\n=== HTTP Request ===")
+        print(f"Path: {self.path}")
+        print(f"Method: {self.command}")
+        print(f"Headers: {dict(self.headers)}")
+        print("===================\n")
+    
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.end_headers()
+
+    def do_GET(self):
+        print(f"\n=== GET Request to {self.path} ===")
+        if self.path == '/getghconfig':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
             
-
-    //         setTemperature(_selectedGh.config.boilerTemperator)
-    //         setVolume(_selectedGh.config.volume)
-    //         setTime(_selectedGh.config.extractionTime)
-    //     }
-    // }, [machine])
-
-
-    // listen to changes current page and if any changes happened, show message to user to save changes or not
-    // useEffect(() => {
-    //     return () => {
-    //         // console.log(CURRENT_PAGE)
+            # Return both group head configurations
+            data = {
+                "gh1": {
+                    "temperature": config.gh1_config['temperature'],
+                    "pre_infusion": config.gh1_config['pre_infusion'],
+                    "extraction_time": config.gh1_config['extraction_time'],
+                    "volume": config.gh1_config['extraction_volume'],
+                    "purge": config.gh1_config['purge'],
+                    "backflush": config.gh1_config['backflush'],
+                    "pressure": 9.0,
+                    "flow": 2.5
+                },
+                "gh2": {
+                    "temperature": config.gh2_config['temperature'],
+                    "pre_infusion": config.gh2_config['pre_infusion'],
+                    "extraction_time": config.gh2_config['extraction_time'],
+                    "volume": config.gh2_config['extraction_volume'],
+                    "purge": config.gh2_config['purge'],
+                    "backflush": config.gh2_config['backflush'],
+                    "pressure": 9.0,
+                    "flow": 2.5
+                }
+            }
             
-    //         const _TMP = useGeneralStore.getState().MACHINE_KEY[`GH${_amperId}`].config
-    //         console.log('unmount', _TMP, temperature)
-    //         // if(_TMP.params.amperId) return
+            print("\nSending GH Configurations:")
+            print("--------------------------------")
+            print(json.dumps(data, indent=2))
+            print("--------------------------------\n")
+            
+            self.wfile.write(json.dumps(data).encode())
+            
+        elif self.path == '/getmainstatus':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            
+            status_data = {
+                "main_temperature": {
+                    "value": config.tempMainTankSetPoint,
+                    "unit": "°C"
+                },
+                "gh1": {
+                    "temperature": {
+                        "value": config.tempHeadGP1SetPoint,
+                        "unit": "°C"
+                    },
+                    "pressure": {
+                        "value": config.Pressure1,
+                        "unit": "bar"
+                    }
+                },
+                "gh2": {
+                    "temperature": {
+                        "value": config.tempHeadGP2SetPoint,
+                        "unit": "°C"
+                    },
+                    "pressure": {
+                        "value": config.Pressure2,
+                        "unit": "bar"
+                    }
+                }
+            }
+            
+            self.wfile.write(json.dumps(status_data).encode())
+            
+        elif self.path == '/getdata':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            
+            data = config.sensors.copy()
+            
+            # Add additional data
+            data["HeadGP1WaterFlow"] = config.FLOWGPH1CGF
+            data["HeadGP2WaterFlow"] = config.FLOWGPH2CGF
+            data["HGP1ACTIVE"] = config.HGP1ACTIVE
+            data["HGP2ACTIVE"] = config.HGP2ACTIVE
+            data["mainTankState"] = config.mainTankState
+            data["HGP1State"] = config.HGP1State
+            data["HGP2State"] = config.HGP2State
+            
+            # Add GH activation flags
+            data["GH1_ACTIVATION_FLAG"] = config.GH1_ACTIVATION_FLAG
+            data["GH2_ACTIVATION_FLAG"] = config.GH2_ACTIVATION_FLAG
+            
+            # Handle pressure data
+            if config.sebar == 0:
+                data["PressureGPH1"] = config.Pressure1
+                data["PressureGPH2"] = config.Pressure2
+            else:
+                data["PressureGPH1"] = "3"
+                data["PressureGPH2"] = "3"
+            
+            self.wfile.write(json.dumps(data).encode())
+            
+        elif self.path == '/geterror':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            
+            data = {
+                "HeadGroup1TemperatureStatus": config.tempHeadGP1Flag,
+                "HeadGroup2TemperatureStatus": config.tempHeadGP2Flag,
+                "MainTankTemperatureStatus": config.tempMainTankFlag
+            }
+            
+            self.wfile.write(json.dumps(data).encode())
+            
+        elif self.path == '/getgauge':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            
+            gauge_data = {
+                "pressure": {
+                    "value": config.Pressure1,
+                    "min": 0,
+                    "max": 12,
+                    "unit": "bar"
+                },
+                "temperature": {
+                    "value": config.tempMainTankSetPoint,
+                    "min": 0,
+                    "max": 120,
+                    "unit": "°C"
+                },
+                "flow": {
+                    "value": config.FLOWGPH1CGF,
+                    "min": 0,
+                    "max": 5,
+                    "unit": "L/min"
+                },
+                "water_level": {
+                    "value": config.sensors["MainTankWaterLevel"],
+                    "min": 0,
+                    "max": 100,
+                    "unit": "%"
+                }
+            }
+            
+            self.wfile.write(json.dumps(gauge_data).encode())
 
-    //         console.log(temperature, _selectedGh.config.boilerTemperator, volume, _selectedGh.config.extractionTime)
-    //         if (temperature !== _selectedGh.config.boilerTemperator || volume !== _selectedGh.config.extractionTime) {
-    //             toast.error('You have unsaved changes, do you want to save them?')
-    //         }
-    //     }
-    // }, [CURRENT_PAGE])
-    console.log('ghAmperConfig rendered', config.temperature)
-    return (
-        <>
-            <motion.div
-                variants={ROUTE_VARIANTS}
-                initial="initial"
-                animate="final"
-                exit="exit"
-                className="flex column alignCenter justifyCenter container sm" style={{
-                    height: '100vh',
-                    padding: 0,
-                }}>
-                <div className="grid col24 alignCenter gap-6 w100" style={{ maxHeight: '100%' }}>
-                    <div className='span-12'>
-                        {/* <Amper
-                            titleSize='1.8em'
-                            valueSize='6em'
-                            title="Main Tank"
-                            progressWidth={24}
-                            axisLineWidth={24}
-                            value={temperature}
+    def do_POST(self):
+        print(f"\n=== POST Request to {self.path} ===")
+        global last_main_data, last_gh1_data, last_gh2_data, main_boiler_state, gh1_button_state, gh2_button_state
+        try:
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length).decode('utf-8')
+            print(f"Raw POST data: {post_data}")
+            params = json.loads(post_data)
+            print(f"Parsed POST data: {json.dumps(params, indent=2)}")
+            
+            if self.path == '/setpressureconfig':
+                print("\n=== Processing Pressure Config Update ===")
+                print(f"Config: {json.dumps(params.get('config', {}), indent=2)}")
+                new_config = params.get('config', {})
+                config.pressureConfig.update({
+                    "pressure": float(new_config.get('pressure', config.pressureConfig['pressure'])),
+                    "max_pressure": float(new_config.get('max_pressure', config.pressureConfig['max_pressure'])),
+                    "min_pressure": float(new_config.get('min_pressure', config.pressureConfig['min_pressure']))
+                })
+                
+                print("\nUpdated Pressure Configuration:")
+                print("--------------------------------")
+                print(json.dumps(config.pressureConfig, indent=2))
+                print("--------------------------------\n")
+                
+                new_main = [main_boiler_state, gh1_button_state, gh2_button_state, int(round(config.pressureConfig['pressure'])), int(round(config.mainAmpereConfig['temperature']))]
+                if last_main_data != new_main:
+                    send_main_uart()
+                    last_main_data = new_main
+            
+            elif self.path == '/setmainconfig':
+                print("\n=== Processing Main Config Update ===")
+                print(f"Config: {json.dumps(params.get('config', {}), indent=2)}")
+                new_config = params.get('config', {})
+                config.mainAmpereConfig.update({
+                    "temperature": float(new_config.get('temperature', config.mainAmpereConfig['temperature']))
+                })
+                
+                print("\nUpdated Main Configuration:")
+                print("--------------------------------")
+                print(json.dumps({
+                    "temperature": config.mainAmpereConfig['temperature']
+                }, indent=2))
+                print("--------------------------------\n")
+                
+                new_main = [main_boiler_state, gh1_button_state, gh2_button_state, int(round(config.pressureConfig['pressure'])), int(round(config.mainAmpereConfig['temperature']))]
+                if last_main_data != new_main:
+                    send_main_uart()
+                    last_main_data = new_main
 
-                            secondTitleSize='1.8em'
-                            thirdTitleSize='1.2em'
-                        /> */}
-                        {/* <Amper
-                            progressWidth={24}
-                            axisLineWidth={24}
-                            titleSize='1.8em'
-                            valueSize='6em'
-                            title="GH 1"
-                            value={temperature}
-                            secondTitleSize='1.8em'
-                            thirdTitleSize='1.2em'
+            elif self.path == '/saveghconfig':
+                print("\n=== Processing GH Config Save ===")
+                print(f"GH ID: {params.get('gh_id')}")
+                print(f"Raw config data: {json.dumps(params.get('config', {}), indent=2)}")
+                new_config = params.get('config', {})
+                gh_id = params.get('gh_id', 'ghundefined')
 
-                        /> */}
+                # Log the current pre-infusion state before update
+                if gh_id == 'gh1':
+                    print("\nCurrent GH1 pre-infusion state:", config.gh1_config['pre_infusion'])
+                elif gh_id == 'gh2':
+                    print("\nCurrent GH2 pre-infusion state:", config.gh2_config['pre_infusion'])
 
-                        <NewAmper
-                            titleSize='1em'
-                            valueSize='3em'
-                            title={`${t('temperature')} - ${_amperId}`}
-                            secondTitle={t('volume')}
-                            secondValue={config.volume}
-                            value2={currentPressure}
+                # Handle pre-infusion data consistently
+                preinf_data = new_config.get('pre_infusion', {})
+                print("\nReceived pre-infusion data:", preinf_data)
+                
+                # Always preserve the existing pre-infusion data if not explicitly changed
+                if gh_id == 'gh1':
+                    current_preinf = config.gh1_config['pre_infusion']
+                else:
+                    current_preinf = config.gh2_config['pre_infusion']
+                
+                if isinstance(preinf_data, dict):
+                    # If it's a dict, preserve both enabled state and time
+                    preinf = {
+                        "enabled": bool(preinf_data.get('enabled', current_preinf['enabled'])),
+                        "time": int(preinf_data.get('time', current_preinf['time']))
+                    }
+                    print("Using new pre-infusion dict:", preinf)
+                else:
+                    # If it's just a number (backward compatibility), only update time
+                    preinf_time = int(preinf_data)
+                    preinf = {
+                        "enabled": current_preinf['enabled'],
+                        "time": preinf_time
+                    }
+                    print("Using legacy format, preserving enabled state:", preinf)
 
-                            thirdTitle={t('extraction_time')}
-                            thirdValue={config.extractionTime}
+                if gh_id == 'gh1':
+                    extraction_time = int(new_config.get('extraction_time', config.gh1_config['extraction_time']))
+                    ext_volume = new_config.get('extraction_volume', new_config.get('volume', config.gh1_config['extraction_volume']))
+                    config.gh1_config.update({
+                        "temperature": float(new_config.get('temperature', config.gh1_config['temperature'])),
+                        "extraction_volume": int(ext_volume),
+                        "extraction_time": extraction_time,
+                        "pre_infusion": preinf,  # Store as dict with enabled state and time
+                        "purge": int(new_config.get('purge', config.gh1_config['purge'])),
+                        "backflush": bool(new_config.get('backflush', config.gh1_config['backflush']))
+                    })
+                    print("\nUpdated GH1 pre-infusion state:", config.gh1_config['pre_infusion'])
+                    config.HGP1ExtractionTime = extraction_time
+                    # Send UART after updating config
+                    send_gh_uart(1, config.gh1_config)
+                    last_gh1_data = [
+                        int(round(config.gh1_config['temperature'])),
+                        int(round(config.gh1_config['extraction_volume'])),
+                        int(round(config.gh1_config['extraction_time'])),
+                        int(round(config.gh1_config['purge'])),
+                        1 if config.gh1_config['pre_infusion']['enabled'] else 0,
+                        int(round(config.gh1_config['pre_infusion']['time']))
+                    ]
+                elif gh_id == 'gh2':
+                    extraction_time = int(new_config.get('extraction_time', config.gh2_config['extraction_time']))
+                    ext_volume = new_config.get('extraction_volume', new_config.get('volume', config.gh2_config['extraction_volume']))
+                    config.gh2_config.update({
+                        "temperature": float(new_config.get('temperature', config.gh2_config['temperature'])),
+                        "extraction_volume": int(ext_volume),
+                        "extraction_time": extraction_time,
+                        "pre_infusion": preinf,  # Store as dict with enabled state and time
+                        "purge": int(new_config.get('purge', config.gh2_config['purge'])),
+                        "backflush": bool(new_config.get('backflush', config.gh2_config['backflush']))
+                    })
+                    print("\nUpdated GH2 pre-infusion state:", config.gh2_config['pre_infusion'])
+                    config.HGP2ExtractionTime = extraction_time
+                    # Send UART after updating config
+                    send_gh_uart(2, config.gh2_config)
+                    last_gh2_data = [
+                        int(round(config.gh2_config['temperature'])),
+                        int(round(config.gh2_config['extraction_volume'])),
+                        int(round(config.gh2_config['extraction_time'])),
+                        int(round(config.gh2_config['purge'])),
+                        1 if config.gh2_config['pre_infusion']['enabled'] else 0,
+                        int(round(config.gh2_config['pre_infusion']['time']))
+                    ]
 
-                            progressWidth={24}
-                            axisLineWidth={24}
-                            value={config.temperature}
+                print("\nFinal Group Head Configurations:")
+                print("--------------------------------")
+                print("Group Head 1:")
+                print(json.dumps(config.gh1_config, indent=2))
+                print("\nGroup Head 2:")
+                print(json.dumps(config.gh2_config, indent=2))
+                print("--------------------------------\n")
 
-                            secondTitleSize='1.8em'
-                            thirdTitleSize='1.2em'
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': True}).encode())
+                return
 
-                            axisLabelDistance={44}
-                            axisTickLength={8}
+            elif self.path == '/setstatusupdate':
+                print("\n=== Processing Button State Update ===")
+                target = params.get('target')
+                status = params.get('status')
+                print(f"Target: {target}")
+                print(f"Status: {status}")
+                print(f"Current states - Main: {main_boiler_state}, GH1: {gh1_button_state}, GH2: {gh2_button_state}")
+                
+                state_changed = False
+                
+                if target == 'main_boiler':
+                    new_state = 1 if status else 0
+                    if new_state != main_boiler_state:
+                        print(f"\nUpdating main boiler button state:")
+                        print(f"Old state: {main_boiler_state}")
+                        print(f"New state: {new_state}")
+                        main_boiler_state = new_state
+                        state_changed = True
+                elif target == 'gh1':
+                    # Force state to 0 if it's currently 1, regardless of status
+                    if gh1_button_state == 1:
+                        gh1_button_state = 0
+                        state_changed = True
+                    elif status:  # Only set to 1 if status is True and current state is 0
+                        gh1_button_state = 1
+                        state_changed = True
+                elif target == 'gh2':
+                    # Force state to 0 if it's currently 1, regardless of status
+                    if gh2_button_state == 1:
+                        gh2_button_state = 0
+                        state_changed = True
+                    elif status:  # Only set to 1 if status is True and current state is 0
+                        gh2_button_state = 1
+                        state_changed = True
+                
+                if state_changed:
+                    print("\nButton state changed, preparing to send UART message...")
+                    print("Current states:")
+                    print(f"Main boiler: {main_boiler_state}")
+                    print(f"GH1 button: {gh1_button_state}")
+                    print(f"GH2 button: {gh2_button_state}")
+                    print(f"Pressure: {int(round(config.pressureConfig['pressure']))}")
+                    print(f"Main temp: {int(round(config.mainAmpereConfig['temperature']))}")
+                    
+                    new_main = [main_boiler_state, gh1_button_state, gh2_button_state,
+                              int(round(config.pressureConfig['pressure'])), 
+                              int(round(config.mainAmpereConfig['temperature']))]
+                    print(f"Last main data: {last_main_data}")
+                    print(f"New main data: {new_main}")
+                    
+                    if last_main_data != new_main:
+                        print("State changed, sending UART message...")
+                        send_main_uart()
+                        last_main_data = new_main
+                    else:
+                        print("No state change detected, skipping UART message")
+                else:
+                    print("\nNo button state changes, skipping UART message")
+                
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode())
+                return
 
-                        />
-                    </div>
-                    <div className='span-12 flex column pr24 pb8' style={{ direction: 'rtl', overflowY: 'auto', maxHeight: '100%', paddingTop: '10em' }}>
-                        {/* <motion.span
-                            variants={BLOCK_ANIMATIONS_VARIANTS}
-                            className='fs-lg '>
-                            فشار هد گروپ {headGroupTitle[Number(params.amperId)]}
-                        </motion.span>
-                        <motion.div
-                            variants={BLOCK_ANIMATIONS_VARIANTS}
-                            className='flex alignCenter'>
-                            <NumberInput
-                                onDecrease={handleDecreasePresure}
-                                onIncrease={handleIncreasePresure}
-                                value={presure}
-                                text='Bar'
-                            />
-                        </motion.div> */}
+            elif self.path == '/savemainconfig':
+                global mode_state, boiler_discharge, barista_light, cup_warmer
+                print("\n=== Processing Main Config Save (Mode, Eco, etc.) ===")
+                print(f"Config: {json.dumps(params.get('config', {}), indent=2)}")
+                new_config = params.get('config', {})
+                # Update mode_state, boiler_discharge, barista_light, cup_warmer if present
+                if 'eco_mode' in new_config:
+                    mode_map = {'off': 0, 'eco': 1, 'sleep': 2}
+                    mode_state = mode_map.get(new_config['eco_mode'], 0)
+                if 'boiler_discharge' in new_config:
+                    discharge_map = {'none': 0, 'drain_refill': 1, 'drain_shutdown': 2}
+                    boiler_discharge = discharge_map.get(new_config['boiler_discharge'], 0)
+                if 'barista_light' in new_config:
+                    if isinstance(new_config['barista_light'], dict):
+                        barista_light = int(new_config['barista_light'].get('percentage', 0)) if new_config['barista_light'].get('enabled', False) else 0
+                    else:
+                        barista_light = int(new_config['barista_light'])
+                if 'cup_warmer' in new_config:
+                    if isinstance(new_config['cup_warmer'], dict):
+                        cup_warmer = int(new_config['cup_warmer'].get('percentage', 0)) if new_config['cup_warmer'].get('enabled', False) else 0
+                    else:
+                        cup_warmer = int(new_config['cup_warmer'])
+                # After updating, send flag 4 UART
+                send_system_status_uart()
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': True}).encode())
+                return
 
+            # Send success response
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': True}).encode())
+            
+        except Exception as e:
+            print(f"\n!!! ERROR in POST request handling !!!")
+            print(f"Error type: {type(e).__name__}")
+            print(f"Error message: {str(e)}")
+            print(f"Request path: {self.path}")
+            print(f"Request headers: {dict(self.headers)}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
+            self.send_response(500)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'error': str(e)}).encode())
 
-                        <motion.span
-                            variants={BLOCK_ANIMATIONS_VARIANTS}
-                            className='mt4 fs-lg '>
-                            {`${t('temperature')} - ${_amperId}`}
-                        </motion.span>
-                        <motion.div
-                            variants={BLOCK_ANIMATIONS_VARIANTS}
-                            className='flex alignCenter'>
-                            <NumberInput
-                                onDecrease={handleDecreaseTemp}
-                                onIncrease={handleIncreaseTemp}
-                                value={config.temperature}
-                                text={t('degrees_celsius')}
-                            />
-                        </motion.div>
+def run_server(port=8000):
+    server_address = ('', port)
+    httpd = HTTPServer(server_address, RequestHandler)
+    print(f'\n=== Starting Backend Server ===')
+    print(f'Server address: {server_address}')
+    print(f'UART port: {uart.port}')
+    print(f'UART baudrate: {uart.baudrate}')
+    print('==============================\n')
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\n=== Shutting down server ===")
+        httpd.server_close()
+        uart.stop()
+    except Exception as e:
+        print(f"\n!!! SERVER ERROR !!!")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        httpd.server_close()
+        uart.stop()
 
-                        <motion.span
-                            variants={BLOCK_ANIMATIONS_VARIANTS}
-                            className='mt4 fs-lg '>
-                            {t('volume')}
-                        </motion.span>
-                        <motion.div
-                            variants={BLOCK_ANIMATIONS_VARIANTS}
-                            className='flex alignCenter'>
-                            <NumberInput
-                                onDecrease={handleDecreaseVolume}
-                                onIncrease={handleIncreaseVolume}
-                                value={config.volume}
-                                text={t('milliliters')}
-                            />
-                        </motion.div>
-
-                        {/* <div className='b bb1 w100 my3' /> */}
-                        <motion.span variants={BLOCK_ANIMATIONS_VARIANTS} className='mt4 fs-lg '>
-                            {t('extraction_time')}
-                        </motion.span>
-                        <motion.div variants={BLOCK_ANIMATIONS_VARIANTS} className='flex alignCenter'>
-                            <NumberInput
-                                onDecrease={handleDecreaseTime}
-                                onIncrease={handleIncreaseTime}
-                                value={config.extractionTime}
-                                text={t('seconds')}
-                            />
-                        </motion.div>
-                        <motion.span
-                            variants={BLOCK_ANIMATIONS_VARIANTS}
-                            className='mt4 fs-lg '>
-                            {t('purge')}
-                        </motion.span>
-                        <motion.div
-                            variants={BLOCK_ANIMATIONS_VARIANTS}
-                            className='flex alignCenter'>
-                            <NumberInput
-                                onDecrease={handleDecreasePurge}
-                                onIncrease={handleIncreasePurge}
-                                value={config.purge}
-                                text={t('seconds')}
-                            />
-                        </motion.div>
-                        <motion.div variants={BLOCK_ANIMATIONS_VARIANTS}>
-                            <Button 
-                                className='outlined large mt4' 
-                                style={{ width: '13em' }}
-                                onClick={() => setIsPreInfusionModalOpen(true)}
-                            >
-                                {t('pre_infusion')}
-                            </Button>
-                        </motion.div>
-                        <motion.div variants={BLOCK_ANIMATIONS_VARIANTS}>
-                            <Button 
-                                className='outlined large mt2' 
-                                style={{ width: '13em' }}
-                                onClick={() => setIsBackflushModalOpen(true)}
-                            >
-                                {t('backflush')}
-                            </Button>
-                        </motion.div>
-
-                        {/* <Switch id='preInfusion' label='Activate Pre-Infusion' className='mt5' />
-                        <Switch id='backflush' label='Activate Backflush' className='mt3' /> */}
-                        <motion.div variants={BLOCK_ANIMATIONS_VARIANTS} className='mt6 flex gap-2 alignCenter'>
-                            <Button onClick={handleSaveChanges} className='dialog-action' style={{ width: '8em' }}>
-                                {t('confirm')}
-                            </Button>
-                            {/* <Link to={`/dashboard/home`}> */}
-                                <Button
-                                    onClick={() => {
-                                        changeCurrentPage({ url: '/dashboard/home', params: {} })
-                                    }}
-                                    className='dialog-action' style={{ width: '8em' }}>
-                                    {t('cancel')}
-                                </Button>
-                            {/* </Link> */}
-                        </motion.div>
-                    </div>
-
-                </div>
-            </motion.div>
-            <PreInfusionModal
-                isOpen={isPreInfusionModalOpen}
-                onClose={() => setIsPreInfusionModalOpen(false)}
-                currentConfig={config}
-            />
-            <MyModal
-                open={isBackflushModalOpen}
-                onClose={() => setIsBackflushModalOpen(false)}
-                modalPaperStyle={{
-                    width: '85%',
-                    maxWidth: '450px',
-                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                    borderRadius: '15px',
-                    padding: '1rem',
-                    position: 'relative',
-                    overflow: 'hidden',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '1.5rem',
-                    border: '1px solid rgba(255, 255, 255, 0.1)',
-                    boxShadow: '0 4px 30px rgba(0, 0, 0, 0.1)',
-                    backdropFilter: 'blur(5px)',
-                }}
-            >
-                <div style={{ width: '100%' }}>
-                    <span
-                        style={{
-                            fontSize: '1.2em',
-                            fontFamily: 'Roboto, sans-serif',
-                            color: 'white',
-                            display: 'block',
-                            marginTop: '1.5rem',
-                            textAlign: 'center',
-                            fontWeight: 600,
-                            marginBottom: '2rem',
-                            padding: '0 1rem'
-                        }}
-                    >
-                        {t('portafilter_locked')}
-                    </span>
-                    <div style={{ display: 'flex', width: '100%', gap: 16, marginTop: 32 }}>
-                        <button
-                            style={{ flex: 1, padding: '0.75em', borderRadius: 8, background: '#b5b5b5', color: '#000', border: 'none', fontSize: '1.1em', fontWeight: 'bold', cursor: 'pointer' }}
-                            onClick={() => setIsBackflushModalOpen(false)}
-                        >
-                            {t('cancel')}
-                        </button>
-                        <button
-                            style={{ flex: 1, padding: '0.75em', borderRadius: 8, background: '#b5b5b5', color: '#000', border: 'none', fontSize: '1.1em', fontWeight: 'bold', cursor: 'pointer' }}
-                            onClick={async () => {
-                                // Save to backend with backflush: true
-                                await saveGHConfig((`gh${_amperId}` as 'gh1' | 'gh2'), {
-                                    temperature: Math.round(config.temperature * 10), // Multiply by 10 and round
-                                    pre_infusion: {
-                                        enabled: config.preInfusionEnabled,
-                                        time: config.preInfusionTime
-                                    },
-                                    extraction_time: config.extractionTime,
-                                    volume: config.volume,
-                                    purge: config.purge,
-                                    pressure: 9.0,
-                                    flow: 2.5,
-                                    backflush: true
-                                });
-
-                                toast.success(t('configuration_saved_successfully'));
-
-                                // Set backflush to false after 4 seconds
-                                setTimeout(async () => {
-                                    await saveGHConfig((`gh${_amperId}` as 'gh1' | 'gh2'), {
-                                        temperature: Math.round(config.temperature * 10), // Multiply by 10 and round
-                                        pre_infusion: {
-                                            enabled: config.preInfusionEnabled,
-                                            time: config.preInfusionTime
-                                        },
-                                        extraction_time: config.extractionTime,
-                                        volume: config.volume,
-                                        purge: config.purge,
-                                        pressure: 9.0,
-                                        flow: 2.5,
-                                        backflush: false
-                                    });
-                                }, 4000);
-
-                                setIsBackflushModalOpen(false);
-                            }}
-                        >
-                            {t('confirm')}
-                        </button>
-                    </div>
-                </div>
-            </MyModal>
-        </>
-    )
-};
-
-export const NumberInput = ({ value, onIncrease, onDecrease, text }: {
-    value: any;
-    onIncrease: () => void;
-    onDecrease: () => void;
-    text: any
-}) => {
-    return (
-        <div className='flex alignCenter'>
-            <HoldableButton className=' py3 px0 outlined'
-                onClick={() => {
-                    onDecrease()
-                    // if (e.detail === 2) {
-                    //     console.log("double click")
-                    // } else if (e.detail === 3) {
-                    //     console.log("triple click")
-                    // }
-                }}
-                longPressThreshold={200}
-                onLongPress={() => {
-                    onDecrease()
-                }}
-            >
-                <MdArrowDropDown size="4em" />
-            </HoldableButton>
-            <HoldableButton className='py3 px0 ml2 outlined'
-                onClick={() => {
-                    onIncrease()
-                    // if (e.detail === 2) {
-                    //     console.log("double click")
-                    // } else if (e.detail === 3) {
-                    //     console.log("triple click")
-                    // }
-                }}
-                // longPressOnce
-                longPressThreshold={200}
-                onLongPress={() => {
-                    onIncrease()
-                }}
-            >
-                <MdArrowDropUp size="4em" />
-            </HoldableButton>
-            <div className='flex column ml4'>
-                <span className='font-bold' style={{ lineHeight: 1, fontSize: '4.5em', paddingBottom: '0.1em' }}>
-                    {value}
-                </span>
-                <span className='fs-md'>
-                    {text}
-                </span>
-            </div>
-        </div>
-    )
-}
-
-{/* <div className='flex alignCenter p2 b b1 radius-1'>
-            <HoldableButton className=' py3 px4'
-                onClick={e => {
-                    onDecrease()
-                    // if (e.detail === 2) {
-                    //     console.log("double click")
-                    // } else if (e.detail === 3) {
-                    //     console.log("triple click")
-                    // }
-                }}
-                longPressThreshold={200}
-                onLongPress={(e, pressDuration) => {
-                    onDecrease()
-                }}
-            >
-                <MdRemove size="2em" />
-            </HoldableButton>
-            <span className='font-bold mx1 textAlign center' style={{ lineHeight: 1, fontSize: '3.5em', minWidth: '3ch', paddingBottom: '0.1em' }}>
-                {value}
-            </span>
-            <HoldableButton className=' py3 px4'
-                onClick={e => {
-                    onIncrease()
-                    // if (e.detail === 2) {
-                    //     console.log("double click")
-                    // } else if (e.detail === 3) {
-                    //     console.log("triple click")
-                    // }
-                }}
-                // longPressOnce
-                longPressThreshold={200}
-                onLongPress={(e, pressDuration) => {
-                    onIncrease()
-                }}
-            >
-                <MdAdd size="2em" />
-            </HoldableButton>
-        </div> */}
-export default GhAmperConfig
+if __name__ == '__main__':
+    run_server() 
