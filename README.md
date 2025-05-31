@@ -46,23 +46,29 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
 
     // Helper function to get pre-infusion data
     const getPreInfusionData = (config: any) => {
+        console.log('getPreInfusionData input:', config);
         if (config?.pre_infusion) {
-            return {
+            const result = {
                 enabled: config.pre_infusion.enabled || false,
                 time: config.pre_infusion.time || 0
             };
+            console.log('getPreInfusionData returning dict format:', result);
+            return result;
         }
         // Fallback to legacy format
         const legacyPreInfusion = config?.preInfusion || _selectedGh.config.preInfusion || 0;
-        return {
+        const result = {
             enabled: legacyPreInfusion > 0,
             time: legacyPreInfusion
         };
+        console.log('getPreInfusionData returning legacy format:', result);
+        return result;
     };
 
     const [config, setConfig] = useState(() => {
+        console.log('Initializing config with currentConfig:', currentConfig);
         const preInfusion = getPreInfusionData(currentConfig);
-        return {
+        const initialConfig = {
             temperature: currentConfig?.temperature || _selectedGh.config.boilerTemperator,
             preInfusionEnabled: preInfusion.enabled,
             preInfusionTime: preInfusion.time,
@@ -71,12 +77,15 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
             purge: currentConfig?.purge || 0,
             backflush: currentConfig?.backflush || false
         };
+        console.log('Initial config state:', initialConfig);
+        return initialConfig;
     });
 
     useEffect(() => {
         if (currentConfig) {
+            console.log('currentConfig changed:', currentConfig);
             const preInfusion = getPreInfusionData(currentConfig);
-            setConfig({
+            const newConfig = {
                 temperature: currentConfig.temperature,
                 preInfusionEnabled: preInfusion.enabled,
                 preInfusionTime: preInfusion.time,
@@ -84,7 +93,9 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
                 volume: currentConfig.volume,
                 purge: currentConfig.purge,
                 backflush: currentConfig.backflush
-            });
+            };
+            console.log('Updating config with:', newConfig);
+            setConfig(newConfig);
         }
     }, [currentConfig]);
 
@@ -163,9 +174,8 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
         changeAmperConfig(`GH${_amperId}`, 'purge', config.purge);
         changeAmperConfig(`GH${_amperId}`, 'backflush', config.backflush);
 
-        // Save to backend directly with correct group head
-        saveGHConfig((`gh${_amperId}` as 'gh1' | 'gh2'), {
-            temperature: Math.round(config.temperature * 10), // Multiply by 10 and round
+        const saveData = {
+            temperature: Math.round(config.temperature * 10),
             pre_infusion: {
                 enabled: config.preInfusionEnabled,
                 time: config.preInfusionTime
@@ -176,7 +186,11 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
             pressure: 9.0,
             flow: 2.5,
             backflush: config.backflush || false
-        });
+        };
+        console.log('Saving to backend with data:', saveData);
+
+        // Save to backend directly with correct group head
+        saveGHConfig((`gh${_amperId}` as 'gh1' | 'gh2'), saveData);
 
         // Optionally notify parent
         if (onSave) {
