@@ -47,10 +47,11 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
     // Helper function to get pre-infusion data
     const getPreInfusionData = (config: any) => {
         console.log('getPreInfusionData input:', config);
-        if (config?.pre_infusion) {
+        // Always try to get the new format first
+        if (config?.pre_infusion && typeof config.pre_infusion === 'object') {
             const result = {
-                enabled: config.pre_infusion.enabled || false,
-                time: config.pre_infusion.time || 0
+                enabled: Boolean(config.pre_infusion.enabled),
+                time: Number(config.pre_infusion.time) || 0
             };
             console.log('getPreInfusionData returning dict format:', result);
             return result;
@@ -58,8 +59,8 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
         // Fallback to legacy format
         const legacyPreInfusion = config?.preInfusion || _selectedGh.config.preInfusion || 0;
         const result = {
-            enabled: legacyPreInfusion > 0,
-            time: legacyPreInfusion
+            enabled: Number(legacyPreInfusion) > 0,
+            time: Number(legacyPreInfusion) || 0
         };
         console.log('getPreInfusionData returning legacy format:', result);
         return result;
@@ -190,32 +191,32 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
         setConfig(prev => ({ ...prev, purge: prev.purge - 1 }));
     }
     const handleSaveChanges = async () => {
-        // First, fetch the latest config to ensure we have the most up-to-date pre-infusion data
+        // First, fetch the latest config to ensure we have the most up-to-date data
         await fetchGHConfig();
         
         // Get the latest config for the current group head
         const ghId = `gh${_amperId}` as 'gh1' | 'gh2';
         const latestConfig = ghConfig?.[ghId];
         
-        console.log('Saving changes with latest config:', {
+        console.log('Saving changes with config:', {
             localConfig: config,
             latestConfig,
             ghConfig
         });
 
-        // Build the save data using the local state for pre-infusion and other values
+        // Build the save data using the local state values
         const saveData = {
-            temperature: Math.round(config.temperature * 10),  // Use local state
+            temperature: Math.round(config.temperature * 10),
             pre_infusion: {
-                enabled: config.preInfusionEnabled,  // Use local state
-                time: config.preInfusionTime  // Use local state
+                enabled: Boolean(config.preInfusionEnabled),
+                time: Number(config.preInfusionTime)
             },
-            extraction_time: config.extractionTime,  // Use local state
-            volume: config.volume,  // Use local state
+            extraction_time: Number(config.extractionTime),
+            volume: Number(config.volume),
             pressure: 9.0,
             flow: 2.5,
-            backflush: config.backflush,  // Use local state
-            purge: config.purge  // Use local state
+            backflush: Boolean(config.backflush),
+            purge: Number(config.purge)
         };
 
         console.log('Saving to backend with data:', saveData);
