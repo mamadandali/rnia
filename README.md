@@ -174,33 +174,23 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
         changeAmperConfig(`GH${_amperId}`, 'purge', config.purge);
         changeAmperConfig(`GH${_amperId}`, 'backflush', config.backflush);
 
-        // Determine the pre-infusion data to use
-        let preInfusionData;
-        if (currentConfig?.pre_infusion) {
-            // Use the pre-infusion data from the backend if available
-            preInfusionData = currentConfig.pre_infusion;
-            console.log('Using pre-infusion from backend:', preInfusionData);
-        } else if (_selectedGh?.config?.preInfusion !== undefined) {
-            // Convert legacy format if available
-            const legacyValue = _selectedGh.config.preInfusion;
-            preInfusionData = {
-                enabled: legacyValue > 0,
-                time: legacyValue
-            };
-            console.log('Converted legacy pre-infusion:', preInfusionData);
-        } else {
-            // Fall back to current state
-            preInfusionData = {
-                enabled: config.preInfusionEnabled,
-                time: config.preInfusionTime
-            };
-            console.log('Using current state for pre-infusion:', preInfusionData);
+        // Get the pre-infusion data that was last saved by the modal
+        // This should be in currentConfig.pre_infusion as that's what the modal updates
+        const modalPreInfusion = currentConfig?.pre_infusion;
+        console.log('Pre-infusion data from modal save:', modalPreInfusion);
+
+        if (!modalPreInfusion) {
+            console.warn('No pre-infusion data found from modal save. This should not happen if modal was used.');
         }
 
-        // Build save data
+        // Build save data using the modal's pre-infusion data
         const saveData = {
             temperature: Math.round(config.temperature * 10),
-            pre_infusion: preInfusionData,
+            // Always use the pre-infusion data that was saved by the modal
+            pre_infusion: modalPreInfusion || {
+                enabled: false,
+                time: 0
+            },
             extraction_time: config.extractionTime,
             volume: config.volume,
             pressure: 9.0,
@@ -209,6 +199,7 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
             purge: config.purge || 0
         };
         console.log('Saving to backend with data:', saveData);
+        console.log('Pre-infusion data being sent:', saveData.pre_infusion);
 
         // Save to backend
         saveGHConfig((`gh${_amperId}` as 'gh1' | 'gh2'), saveData);
