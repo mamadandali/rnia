@@ -81,6 +81,34 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
         return initialConfig;
     });
 
+    // Fetch latest config when component mounts
+    useEffect(() => {
+        const fetchLatestConfig = async () => {
+            console.log('Fetching latest config on mount...');
+            await fetchGHConfig();
+            const ghId = `gh${_amperId}` as 'gh1' | 'gh2';
+            const latestConfig = ghConfig?.[ghId];
+            
+            if (latestConfig) {
+                console.log('Latest config from backend:', latestConfig);
+                const preInfusion = getPreInfusionData(latestConfig);
+                setConfig(prev => ({
+                    ...prev,
+                    temperature: latestConfig.temperature,
+                    preInfusionEnabled: preInfusion.enabled,
+                    preInfusionTime: preInfusion.time,
+                    extractionTime: latestConfig.extraction_time,
+                    volume: latestConfig.volume,
+                    purge: latestConfig.purge,
+                    backflush: latestConfig.backflush
+                }));
+            }
+        };
+
+        fetchLatestConfig();
+    }, [_amperId]); // Only run on mount and when _amperId changes
+
+    // Update config when currentConfig changes (this is now a backup)
     useEffect(() => {
         if (currentConfig) {
             console.log('currentConfig changed:', currentConfig);
@@ -94,7 +122,7 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
                 purge: currentConfig.purge,
                 backflush: currentConfig.backflush
             };
-            console.log('Updating config with:', newConfig);
+            console.log('Updating config with currentConfig:', newConfig);
             setConfig(newConfig);
         }
     }, [currentConfig]);
