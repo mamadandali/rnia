@@ -92,12 +92,15 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
             
             if (latestConfig) {
                 console.log('Latest config from backend:', latestConfig);
-                const preInfusion = getPreInfusionData(latestConfig);
+                // Get pre-infusion data directly from the backend response
+                const preInfusion = latestConfig.pre_infusion || { enabled: false, time: 0 };
+                console.log('Pre-infusion data from backend:', preInfusion);
+                
                 setConfig(prev => ({
                     ...prev,
                     temperature: latestConfig.temperature,
-                    preInfusionEnabled: preInfusion.enabled,
-                    preInfusionTime: preInfusion.time,
+                    preInfusionEnabled: Boolean(preInfusion.enabled),
+                    preInfusionTime: Number(preInfusion.time),
                     extractionTime: latestConfig.extraction_time,
                     volume: latestConfig.volume,
                     purge: latestConfig.purge,
@@ -113,18 +116,20 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
     useEffect(() => {
         if (currentConfig) {
             console.log('currentConfig changed:', currentConfig);
-            const preInfusion = getPreInfusionData(currentConfig);
-            const newConfig = {
+            // Get pre-infusion data directly from currentConfig
+            const preInfusion = currentConfig.pre_infusion || { enabled: false, time: 0 };
+            console.log('Pre-infusion data from currentConfig:', preInfusion);
+            
+            setConfig(prev => ({
+                ...prev,
                 temperature: currentConfig.temperature,
-                preInfusionEnabled: preInfusion.enabled,
-                preInfusionTime: preInfusion.time,
+                preInfusionEnabled: Boolean(preInfusion.enabled),
+                preInfusionTime: Number(preInfusion.time),
                 extractionTime: currentConfig.extraction_time,
                 volume: currentConfig.volume,
                 purge: currentConfig.purge,
                 backflush: currentConfig.backflush
-            };
-            console.log('Updating config with currentConfig:', newConfig);
-            setConfig(newConfig);
+            }));
         }
     }, [currentConfig]);
 
