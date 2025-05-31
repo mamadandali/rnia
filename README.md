@@ -185,17 +185,23 @@ class UARTCommunicator:
             
             # Handle pre-infusion consistently with backend
             preinf_data = config.get('pre_infusion', {})
+            print("\nPre-infusion data from config:", preinf_data)
+            
             if isinstance(preinf_data, dict):
                 # Only use the time value if pre-infusion is enabled
                 if preinf_data.get('enabled', False):
                     preinf = int(round(preinf_data.get('time', 0)))
+                    print(f"Pre-infusion enabled, using time: {preinf}")
                 else:
                     preinf = 0  # Set to 0 if pre-infusion is disabled
+                    print("Pre-infusion disabled, setting time to 0")
             else:
                 # If it's just a number (backward compatibility), use it directly
                 preinf = int(round(preinf_data))
+                print(f"Using legacy pre-infusion format: {preinf}")
             
             # Print configuration details
+            print(f"\nConfiguration details:")
             print(f"Temperature: {temp/10}°C (raw: {temp})")
             print(f"Extraction Volume: {ext_vol}ml")
             print(f"Extraction Time: {ext_time}s")
@@ -204,6 +210,7 @@ class UARTCommunicator:
             
             # Send main configuration
             message = f"{flag};{temp};{ext_vol};{ext_time};{purge};{preinf}"
+            print(f"\nSending UART message: {message}")
             self.send_string(message)
             
             # Send backflush status
