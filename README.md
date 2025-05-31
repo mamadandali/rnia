@@ -44,7 +44,10 @@ class Config:
             "temperature": 91.0,
             "extraction_volume": 0,
             "extraction_time": 20,
-            "pre_infusion": 0,
+            "pre_infusion": {
+                "enabled": False,
+                "time": 0
+            },
             "purge": 0,
             "backflush": False
         }
@@ -54,7 +57,10 @@ class Config:
             "temperature": 92.0,
             "extraction_volume": 0,
             "extraction_time": 20,
-            "pre_infusion": 0,
+            "pre_infusion": {
+                "enabled": False,
+                "time": 0
+            },
             "purge": 0,
             "backflush": False
         }
@@ -498,13 +504,17 @@ class RequestHandler(BaseHTTPRequestHandler):
                 preinf_data = new_config.get('pre_infusion', {})
                 if isinstance(preinf_data, dict):
                     # If it's a dict, preserve both enabled state and time
-                    preinf_enabled = preinf_data.get('enabled', False)
-                    preinf_time = int(preinf_data.get('time', 0)) if preinf_enabled else 0
-                    preinf = {'enabled': preinf_enabled, 'time': preinf_time}
+                    preinf = {
+                        "enabled": bool(preinf_data.get('enabled', False)),
+                        "time": int(preinf_data.get('time', 0))
+                    }
                 else:
-                    # If it's just a number, convert to dict format
+                    # If it's just a number (backward compatibility), convert to dict format
                     preinf_time = int(preinf_data)
-                    preinf = {'enabled': preinf_time > 0, 'time': preinf_time}
+                    preinf = {
+                        "enabled": preinf_time > 0,
+                        "time": preinf_time
+                    }
 
                 if gh_id == 'gh1':
                     extraction_time = int(new_config.get('extraction_time', config.gh1_config['extraction_time']))
@@ -525,8 +535,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                         int(round(config.gh1_config['extraction_volume'])),
                         int(round(config.gh1_config['extraction_time'])),
                         int(round(config.gh1_config['purge'])),
-                        1 if config.gh1_config['pre_infusion'] > 0 else 0,
-                        int(round(config.gh1_config['pre_infusion']))
+                        1 if config.gh1_config['pre_infusion']['enabled'] else 0,
+                        int(round(config.gh1_config['pre_infusion']['time']))
                     ]
                 elif gh_id == 'gh2':
                     extraction_time = int(new_config.get('extraction_time', config.gh2_config['extraction_time']))
@@ -547,8 +557,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                         int(round(config.gh2_config['extraction_volume'])),
                         int(round(config.gh2_config['extraction_time'])),
                         int(round(config.gh2_config['purge'])),
-                        1 if config.gh2_config['pre_infusion'] > 0 else 0,
-                        int(round(config.gh2_config['pre_infusion']))
+                        1 if config.gh2_config['pre_infusion']['enabled'] else 0,
+                        int(round(config.gh2_config['pre_infusion']['time']))
                     ]
                 print("\nUpdated Group Head Configurations:")
                 print("--------------------------------")
