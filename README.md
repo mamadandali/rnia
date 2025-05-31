@@ -33,12 +33,8 @@ interface Props {
 const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
     const { t } = useTranslation();
     const { [MACHINE_KEY]: machine, changeAmperConfig, changeCurrentPage, CURRENT_PAGE } = useGeneralStore();
-    const _amperId = CURRENT_PAGE.params.amperId || '1'
-    // const navigate = useNavigate();
-    // console.log(changeAmperConfig)
-    // const params = useParams();
-    const _selectedGh = _amperId === '1' ? machine.GH1 : machine.GH2
-    const { saveGHConfig } = useConfigData();
+    const { saveGHConfig, ghConfig } = useConfigData();
+    const _amperId = CURRENT_PAGE.params.amperId || '1';
     const [currentPressure, setCurrentPressure] = useState(0);
     const [isPreInfusionModalOpen, setIsPreInfusionModalOpen] = React.useState(false);
     const [isBackflushModalOpen, setIsBackflushModalOpen] = React.useState(false);
@@ -56,7 +52,7 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
             return result;
         }
         // Fallback to legacy format
-        const legacyPreInfusion = config?.preInfusion || _selectedGh.config.preInfusion || 0;
+        const legacyPreInfusion = config?.preInfusion || 0;
         const result = {
             enabled: legacyPreInfusion > 0,
             time: legacyPreInfusion
@@ -69,11 +65,11 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
         console.log('Initializing config with currentConfig:', currentConfig);
         const preInfusion = getPreInfusionData(currentConfig);
         const initialConfig = {
-            temperature: currentConfig?.temperature || _selectedGh.config.boilerTemperator,
+            temperature: currentConfig?.temperature || 0,
             preInfusionEnabled: preInfusion.enabled,
             preInfusionTime: preInfusion.time,
-            extractionTime: currentConfig?.extraction_time || _selectedGh.config.extractionTime,
-            volume: currentConfig?.volume || _selectedGh.config.volume,
+            extractionTime: currentConfig?.extraction_time || 0,
+            volume: currentConfig?.volume || 0,
             purge: currentConfig?.purge || 0,
             backflush: currentConfig?.backflush || false
         };
@@ -161,56 +157,42 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
         if (config.purge === 0) return;
         setConfig(prev => ({ ...prev, purge: prev.purge - 1 }));
     }
-    function handleSaveChanges() {
-        console.log('Saving changes with config:', config);
-        console.log('Current amperId:', _amperId);
-        console.log('Current config from backend:', currentConfig);
-        console.log('Selected GH config:', _selectedGh?.config);
-        
-        // Update local state
-        changeAmperConfig(`GH${_amperId}`, 'boilerTemperator', config.temperature);
-        changeAmperConfig(`GH${_amperId}`, 'volume', config.volume);
-        changeAmperConfig(`GH${_amperId}`, 'extractionTime', config.extractionTime);
-        changeAmperConfig(`GH${_amperId}`, 'purge', config.purge);
-        changeAmperConfig(`GH${_amperId}`, 'backflush', config.backflush);
+    const handleSaveChanges = async () => {
+        try {
+            // Get the current configuration from the backend
+            const currentConfig = ghConfig?.[`gh${_amperId}` as 'gh1' | 'gh2'];
+            if (!currentConfig) {
+                console.error('No current configuration found');
+                return;
+            }
 
-        // Get the pre-infusion data that was last saved by the modal
-        // This should be in currentConfig.pre_infusion as that's what the modal updates
-        const modalPreInfusion = currentConfig?.pre_infusion;
-        console.log('Pre-infusion data from modal save:', modalPreInfusion);
+            // Build save data object, excluding pre-infusion data
+            const saveData = {
+                temperature: config.temperature,
+                extraction_time: config.extractionTime,
+                volume: config.volume,
+                pressure: currentPressure,
+                flow: 2.5,
+                backflush: config.backflush,
+                purge: config.purge,
+                // Use the current pre-infusion data from the backend
+                pre_infusion: currentConfig.pre_infusion
+            };
 
-        if (!modalPreInfusion) {
-            console.warn('No pre-infusion data found from modal save. This should not happen if modal was used.');
+            console.log('Saving configuration:', {
+                ghId: `gh${_amperId}`,
+                saveData,
+                currentPreInfusion: currentConfig.pre_infusion
+            });
+
+            // Save the configuration
+            await saveGHConfig(`gh${_amperId}` as 'gh1' | 'gh2', saveData);
+            toast.success(t('configuration_saved_successfully'));
+        } catch (error) {
+            console.error('Error saving configuration:', error);
+            toast.error(t('error_saving_configuration'));
         }
-
-        // Build save data using the modal's pre-infusion data
-        const saveData = {
-            temperature: Math.round(config.temperature * 10),
-            // Always use the pre-infusion data that was saved by the modal
-            pre_infusion: modalPreInfusion || {
-                enabled: false,
-                time: 0
-            },
-            extraction_time: config.extractionTime,
-            volume: config.volume,
-            pressure: 9.0,
-            flow: 2.5,
-            backflush: config.backflush || false,
-            purge: config.purge || 0
-        };
-        console.log('Saving to backend with data:', saveData);
-        console.log('Pre-infusion data being sent:', saveData.pre_infusion);
-
-        // Save to backend
-        saveGHConfig((`gh${_amperId}` as 'gh1' | 'gh2'), saveData);
-
-        if (onSave) {
-            console.log('Calling onSave with config:', config);
-            onSave(config);
-        }
-
-        toast.success('Configuration saved successfully.');
-    }
+    };
     // useEffect(() => {
     //     if (machine) {
             
