@@ -33,8 +33,12 @@ interface Props {
 const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
     const { t } = useTranslation();
     const { [MACHINE_KEY]: machine, changeAmperConfig, changeCurrentPage, CURRENT_PAGE } = useGeneralStore();
-    const { saveGHConfig, ghConfig } = useConfigData();
-    const _amperId = CURRENT_PAGE.params.amperId || '1';
+    const _amperId = CURRENT_PAGE.params.amperId || '1'
+    // const navigate = useNavigate();
+    // console.log(changeAmperConfig)
+    // const params = useParams();
+    const _selectedGh = _amperId === '1' ? machine.GH1 : machine.GH2
+    const { saveGHConfig, fetchGHConfig, ghConfig } = useConfigData();
     const [currentPressure, setCurrentPressure] = useState(0);
     const [isPreInfusionModalOpen, setIsPreInfusionModalOpen] = React.useState(false);
     const [isBackflushModalOpen, setIsBackflushModalOpen] = React.useState(false);
@@ -52,7 +56,7 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
             return result;
         }
         // Fallback to legacy format
-        const legacyPreInfusion = config?.preInfusion || 0;
+        const legacyPreInfusion = config?.preInfusion || _selectedGh.config.preInfusion || 0;
         const result = {
             enabled: legacyPreInfusion > 0,
             time: legacyPreInfusion
@@ -65,11 +69,11 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
         console.log('Initializing config with currentConfig:', currentConfig);
         const preInfusion = getPreInfusionData(currentConfig);
         const initialConfig = {
-            temperature: currentConfig?.temperature || 0,
+            temperature: currentConfig?.temperature || _selectedGh.config.boilerTemperator,
             preInfusionEnabled: preInfusion.enabled,
             preInfusionTime: preInfusion.time,
-            extractionTime: currentConfig?.extraction_time || 0,
-            volume: currentConfig?.volume || 0,
+            extractionTime: currentConfig?.extraction_time || _selectedGh.config.extractionTime,
+            volume: currentConfig?.volume || _selectedGh.config.volume,
             purge: currentConfig?.purge || 0,
             backflush: currentConfig?.backflush || false
         };
@@ -158,40 +162,37 @@ const GhAmperConfig = ({ onSave, currentConfig }: Props) => {
         setConfig(prev => ({ ...prev, purge: prev.purge - 1 }));
     }
     const handleSaveChanges = async () => {
-        try {
-            // Get the current configuration from the backend
-            const currentConfig = ghConfig?.[`gh${_amperId}` as 'gh1' | 'gh2'];
-            if (!currentConfig) {
-                console.error('No current configuration found');
-                return;
-            }
+        // First, fetch the latest config to ensure we have the most up-to-date pre-infusion data
+        await fetchGHConfig();
+        
+        // Get the latest config for the current group head
+        const ghId = `gh${_amperId}` as 'gh1' | 'gh2';
+        const latestConfig = ghConfig?.[ghId];
+        
+        console.log('Saving changes with latest config:', {
+            localConfig: config,
+            latestConfig,
+            ghConfig
+        });
 
-            // Build save data object, excluding pre-infusion data
-            const saveData = {
-                temperature: config.temperature,
-                extraction_time: config.extractionTime,
-                volume: config.volume,
-                pressure: currentPressure,
-                flow: 2.5,
-                backflush: config.backflush,
-                purge: config.purge,
-                // Use the current pre-infusion data from the backend
-                pre_infusion: currentConfig.pre_infusion
-            };
+        // Build the save data using the latest config for pre-infusion and local state for other values
+        const saveData = {
+            temperature: Math.round(config.temperature * 10),  // Use local state
+            pre_infusion: latestConfig?.pre_infusion || {
+                enabled: false,
+                time: 0
+            },
+            extraction_time: config.extractionTime,  // Use local state
+            volume: config.volume,  // Use local state
+            pressure: 9.0,
+            flow: 2.5,
+            backflush: config.backflush,  // Use local state
+            purge: config.purge  // Use local state
+        };
 
-            console.log('Saving configuration:', {
-                ghId: `gh${_amperId}`,
-                saveData,
-                currentPreInfusion: currentConfig.pre_infusion
-            });
-
-            // Save the configuration
-            await saveGHConfig(`gh${_amperId}` as 'gh1' | 'gh2', saveData);
-            toast.success(t('configuration_saved_successfully'));
-        } catch (error) {
-            console.error('Error saving configuration:', error);
-            toast.error(t('error_saving_configuration'));
-        }
+        console.log('Saving to backend with data:', saveData);
+        await saveGHConfig(ghId, saveData);
+        toast.success(t('configuration_saved_successfully'));
     };
     // useEffect(() => {
     //     if (machine) {
