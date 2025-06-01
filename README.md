@@ -548,6 +548,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 print("\n=== Processing Main Config Update ===")
                 print(f"Config: {json.dumps(params.get('config', {}), indent=2)}")
                 new_config = params.get('config', {})
+                old_temp = config.mainAmpereConfig['temperature']
                 config.mainAmpereConfig.update({
                     "temperature": float(new_config.get('temperature', config.mainAmpereConfig['temperature']))
                 })
@@ -560,10 +561,20 @@ class RequestHandler(BaseHTTPRequestHandler):
                 print("--------------------------------\n")
                 
                 new_main = [main_boiler_state, gh1_button_state, gh2_button_state, int(round(config.pressureConfig['pressure'])), int(round(config.mainAmpereConfig['temperature']))]
+                print(f"\nDebug - Main Config Update:")
+                print(f"Old temperature: {old_temp}")
+                print(f"New temperature: {config.mainAmpereConfig['temperature']}")
+                print(f"Last main data: {last_main_data}")
+                print(f"New main data: {new_main}")
+                print(f"Are they different? {last_main_data != new_main}")
+                
                 if last_main_data != new_main:
+                    print("Sending UART message due to config change...")
                     send_main_uart()
                     last_main_data = new_main
-
+                else:
+                    print("No change detected, skipping UART message")
+            
             elif self.path == '/saveghconfig':
                 print("\n=== Processing GH Config Save ===")
                 print(f"GH ID: {params.get('gh_id')}")
