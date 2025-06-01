@@ -735,29 +735,33 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
 
             elif self.path == '/savemainconfig':
-                global mode_state, boiler_discharge, barista_light, cup_warmer
                 print("\n=== Processing Main Config Save (Mode, Eco, etc.) ===")
                 print(f"Config: {json.dumps(params.get('config', {}), indent=2)}")
                 new_config = params.get('config', {})
-                # Update mode_state, boiler_discharge, barista_light, cup_warmer if present
-                if 'eco_mode' in new_config:
-                    mode_map = {'off': 0, 'eco': 1, 'sleep': 2}
-                    mode_state = mode_map.get(new_config['eco_mode'], 0)
-                if 'boiler_discharge' in new_config:
-                    discharge_map = {'none': 0, 'drain_refill': 1, 'drain_shutdown': 2}
-                    boiler_discharge = discharge_map.get(new_config['boiler_discharge'], 0)
-                if 'barista_light' in new_config:
-                    if isinstance(new_config['barista_light'], dict):
-                        barista_light = int(new_config['barista_light'].get('percentage', 0)) if new_config['barista_light'].get('enabled', False) else 0
-                    else:
-                        barista_light = int(new_config['barista_light'])
-                if 'cup_warmer' in new_config:
-                    if isinstance(new_config['cup_warmer'], dict):
-                        cup_warmer = int(new_config['cup_warmer'].get('percentage', 0)) if new_config['cup_warmer'].get('enabled', False) else 0
-                    else:
-                        cup_warmer = int(new_config['cup_warmer'])
-                # After updating, send flag 4 UART
-                send_system_status_uart()
+                # Update mainAmpereConfig with new values before sending flag 3
+                if 'temperature' in new_config:
+                    config.mainAmpereConfig['temperature'] = float(new_config['temperature'])
+                if 'pressure' in new_config:
+                    config.mainAmpereConfig['pressure'] = float(new_config['pressure'])
+                send_main_uart()           # Print flag 3 for main config save
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': True}).encode())
+                return
+
+            elif self.path == '/setboilerdischarge':
+                print("\n=== Processing Boiler Discharge Update ===")
+                discharge_map = {'none': 0, 'drain_refill': 1, 'drain_shutdown': 2}
+                discharge_value = params.get('discharge', 'none')
+                discharge_flag_value = discharge_map.get(discharge_value, 0)
+                print(f"Received discharge: {discharge_value} (flag value: {discharge_flag_value})")
+                # Print UART message for flag 17
+                s = f"17;{discharge_flag_value}"
+                print_uart_message(17, s)
+                uart.send_boiler_discharge(discharge_flag_value)
+                print(f"=== Boiler Discharge (Flag 17) Sent ===\n")
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
