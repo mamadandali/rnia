@@ -1597,11 +1597,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
+                self.send_header('Access-Control-Allow-Headers', 'Content-Type')
                 self.end_headers()
-                self.wfile.write(json.dumps({
-                    'success': True,
-                    'message': 'All errors cleared'
-                }).encode())
+                self.wfile.write(json.dumps({'success': True}).encode())
                 return
 
             # Add new endpoint for service mode (flag 21)
@@ -1671,7 +1670,13 @@ class RequestHandler(BaseHTTPRequestHandler):
         except Exception as e:
             logging.error(f"Error in do_POST: {str(e)}")
             print(f"\nError in do_POST: {str(e)}")
-            self.send_error(500, str(e))
+            self.send_response(500)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
+            self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+            self.end_headers()
+            self.wfile.write(json.dumps({'error': str(e)}).encode())
             return
 
 def run_server(port=8000):
@@ -1757,7 +1762,7 @@ if __name__ == "__main__":
         test_all_errors()
         
         # Start the server
-        run_server()
+    run_server()
     except KeyboardInterrupt:
         print("\nShutting down server...")
         sys.exit(0)
