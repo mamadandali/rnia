@@ -9,6 +9,7 @@ import random
 from urllib.parse import parse_qs
 from datetime import datetime
 import serial  # اضافه کردن کتابخانه pyserial
+import subprocess  # اضافه کردن کتابخانه subprocess
 
 # Global state variables
 main_boiler_state = 0
@@ -476,6 +477,33 @@ def reset_boiler_discharge():
     send_system_status_uart()  # Send update after reset
     print("================================\n")
 
+def control_display_power(mode: int):
+    """کنترل وضعیت صفحه نمایش بر اساس حالت سیستم
+    mode: 0=عادی (غیرفعال کردن کامل خواب), 1=eco (فعال کردن خواب بعد از مدتی), 2=sleep (بدون تغییر)
+    """
+    try:
+        if mode == 0:  # حالت عادی - غیرفعال کردن کامل خواب
+            # غیرفعال کردن کامل screensaver و DPMS
+            subprocess.run(['xset', 's', 'off'], check=True)
+            subprocess.run(['xset', '-dpms'], check=True)
+            # تنظیم timeout‌ها به صفر برای اطمینان از عدم خواب رفتن
+            subprocess.run(['xset', 's', '0'], check=True)
+            subprocess.run(['xset', 'dpms', '0', '0', '0'], check=True)
+            print("Display sleep completely disabled (normal mode)")
+        elif mode == 1:  # حالت eco - فعال کردن خواب بعد از مدتی
+            # فعال کردن screensaver و DPMS
+            subprocess.run(['xset', 's', 'on'], check=True)
+            subprocess.run(['xset', '+dpms'], check=True)
+            # تنظیم timeout‌ها برای خواب رفتن بعد از 30 ثانیه
+            subprocess.run(['xset', 's', '30'], check=True)  # 30 ثانیه
+            subprocess.run(['xset', 'dpms', '30', '30', '30'], check=True)  # 30 ثانیه
+            print("Display sleep enabled after 30 seconds (eco mode)")
+        # در حالت sleep (mode=2) کاری انجام نمی‌دهیم
+    except Exception as e:
+        print(f"Error controlling display power: {str(e)}")
+        print("Please make sure x11-xserver-utils is installed:")
+        print("sudo apt-get install x11-xserver-utils")
+
 def update_system_status(mode=None, light=None, cup=None, month=None, day=None, hour=None, minute=None):
     """Update system status and send UART message if any value changes"""
     global mode_state, boiler_discharge, barista_light, cup_warmer
@@ -486,6 +514,7 @@ def update_system_status(mode=None, light=None, cup=None, month=None, day=None, 
     if mode is not None and mode != mode_state:
         print(f"Mode changing from {mode_state} to {mode}")
         mode_state = mode
+        control_display_power(mode)  # فراخوانی تابع کنترل صفحه نمایش
         changed = True
     if light is not None and light != barista_light:
         print(f"Barista light changing from {barista_light} to {light}")
@@ -516,6 +545,9 @@ def send_service_uart(enabled: bool):
         print(f"DATA: {s}")
         print("-"*80)
         print("="*80 + "\n")
+        
+        # ارسال پیام از طریق UART
+        uart.send_string(s)
         
         # Log to file and force flush
         logging.info(f"SERVICE MODE UART: {s}")
