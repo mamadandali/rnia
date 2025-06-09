@@ -2,7 +2,7 @@ import json
 import logging
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any
+from typing import Any, List, Dict
 import threading
 import time
 import random
@@ -20,6 +20,41 @@ gh2_uart_active = False
 last_main_data = None
 last_gh1_data = None
 last_gh2_data = None
+
+# Error management
+error_history: List[Dict[str, Any]] = []  # List of error records
+error_lock = threading.Lock()  # Lock for thread-safe error operations
+error_counter = 0  # Counter for error row numbers
+
+def add_error(error_code: int):
+    """Add an error code to error history with timestamp"""
+    global error_counter
+    with error_lock:
+        error_counter += 1
+        error_record = {
+            'row': error_counter,
+            'code': error_code,
+            'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        error_history.append(error_record)
+        logging.info(f"Error added: E{error_code:02d} at {error_record['date']}")
+
+def remove_error(error_code: int):
+    """Remove an error code from active errors"""
+    with error_lock:
+        active_errors.discard(error_code)
+        logging.info(f"Error removed: E{error_code:02d}")
+
+def clear_all_errors():
+    """Clear all error history"""
+    with error_lock:
+        error_history.clear()
+        logging.info("All errors cleared")
+
+def get_active_errors() -> List[Dict[str, Any]]:
+    """Get list of error records"""
+    with error_lock:
+        return error_history.copy()
 
 # Configure logging to print to both file and console
 logging.basicConfig(
@@ -374,12 +409,6 @@ ERROR_LIST = [
     ] + ["" for _ in range(29, 57)])
 ]
 
-# لیست سراسری برای ذخیره خطاهای ثبت‌شده (فقط شماره خطا و زمان)
-ERROR_HISTORY = []
-
-# نگهداری آخرین وضعیت هر actuator
-last_actuator_states = {i: False for i in range(22, 45)}
-
 def send_gh_uart(flag, cfg, send_preinfusion=False, send_backflush=False):
     """Simulate sending group head configuration"""
     print(f"\nSending GH{flag} UART message...")
@@ -600,35 +629,6 @@ def send_actuator_uart(flag: int, enabled: bool):
     logging.info(f"Actuator {flag} {'enabled' if enabled else 'disabled'}")
     logging.info(f"UART message sent: {message}")
 
-def send_error_uart(error_number: int):
-    """
-    ارسال پیام خطا از طریق UART با فلگ 20
-    فرمت پیام: 20;error_number
-    مثال: 20;2 برای خطای E02
-    """
-    message = f"20;{error_number}"
-    print("\n" + "="*80)
-    print("ERROR UART MESSAGE:")
-    print("-"*80)
-    print(f"Error number: {error_number}")
-    print(f"UART Message: {message}")
-    print("-"*80)
-    print("="*80 + "\n")
-    
-    # ارسال پیام UART
-    simulate_uart_send(message)
-    
-    # اضافه کردن به تاریخچه خطاها
-    ERROR_HISTORY.append({
-        "error_number": error_number,
-        "timestamp": time.time(),
-        "error_message": ERROR_MESSAGES[error_number] if error_number < len(ERROR_MESSAGES) else "خطای نامشخص"
-    })
-    
-    # لاگ کردن
-    logging.info(f"Error {error_number} sent via UART: {message}")
-    logging.info(f"Error message: {ERROR_MESSAGES[error_number] if error_number < len(ERROR_MESSAGES) else 'خطای نامشخص'}")
-
 def handle_uart_message(flag: int, values: list):
     global last_gh1_start, last_gh2_start, config
     print(f"\n=== UART Message Received ===")
@@ -636,26 +636,6 @@ def handle_uart_message(flag: int, values: list):
     print(f"Values: {values}")
     
     try:
-        if flag == 20:  # پیام خطا
-            error_number = int(values[0])
-            print(f"\nProcessing error message (flag 20)")
-            print(f"Error number: {error_number}")
-            
-            # اضافه کردن به تاریخچه خطاها
-            ERROR_HISTORY.append({
-                "error_number": error_number,
-                "timestamp": time.time(),
-                "error_message": ERROR_MESSAGES[error_number] if error_number < len(ERROR_MESSAGES) else "خطای نامشخص"
-            })
-            
-            # به‌روزرسانی وضعیت خطا در config
-            if error_number < len(ERROR_MESSAGES):
-                error_key = f"error_{error_number:02d}"
-                config.error_states[error_key] = True
-                print(f"Updated error state for {error_key}")
-            
-            return
-
         if flag == 7:  # پیام قفل
             print("\nProcessing lock message (flag 7)")
             lock_type = int(values[0])
@@ -847,6 +827,13 @@ def handle_uart_message(flag: int, values: list):
                 print("Received GH2 extraction stop (14;0), setting HGP2ACTIVE=0")
                 config.HGP2ACTIVE = 0
                 config.gh2_extraction_in_progress = False
+        elif flag == 20:  # Error message
+            error_code = int(values[0])
+            if error_code > 0:
+                add_error(error_code)
+            else:
+                clear_all_errors()
+            return
     except Exception as e:
         print(f"Error handling UART message: {str(e)}")
         logging.error(f"Error handling UART message: {str(e)}")
@@ -1035,23 +1022,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
-            
-            # تبدیل تاریخچه خطاها به فرمت مناسب برای ارسال
-            error_list = []
-            for error in ERROR_HISTORY:
-                error_list.append({
-                    "error_number": error["error_number"],
-                    "timestamp": error["timestamp"],
-                    "error_message": error["error_message"],
-                    "formatted_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(error["timestamp"]))
-                })
-            
-            data = {
-                "errors": error_list,
-                "current_errors": {k: v for k, v in config.error_states.items() if v}
-            }
-            
-            self.wfile.write(json.dumps(data).encode())
+            errors = get_active_errors()
+            self.wfile.write(json.dumps(errors).encode())
             return
 
         elif self.path == '/getservicedata':
@@ -1617,15 +1589,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
 
             elif self.path == '/clearerrors':
-                # پاک کردن تاریخچه خطاها
-                ERROR_HISTORY.clear()
-                
-                # پاک کردن وضعیت خطاها در config
-                config.error_states = {k: False for k in config.error_states}
-                
-                # ارسال پیام UART برای پاک کردن خطاها
-                send_error_uart(0)  # ارسال خطای 0 برای پاک کردن همه خطاها
-                
+                clear_all_errors()
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
@@ -1744,5 +1708,52 @@ def run_server(port=8000):
         uart.close()  # Close UART port
         httpd.server_close()
 
-if __name__ == '__main__':
-    run_server()
+def test_all_errors():
+    """Test function to verify all possible errors can be added"""
+    print("\n=== Testing All Possible Errors ===")
+    # Test all error codes from 0 to 56
+    for error_code in range(57):
+        try:
+            # Simulate UART message
+            message = f"20;{error_code}"
+            print(f"\nTesting error code {error_code} (E{error_code:02d})")
+            print(f"Sending UART message: {message}")
+            
+            # Parse and process the message
+            parts = message.split(';')
+            flag = int(parts[0])
+            values = [int(x) for x in parts[1:]]
+            
+            # Process the message
+            handle_uart_message(flag, values)
+            
+            # Verify error was added
+            errors = get_active_errors()
+            last_error = errors[-1] if errors else None
+            if last_error and last_error['code'] == error_code:
+                print(f"✓ Successfully added error E{error_code:02d}")
+            else:
+                print(f"✗ Failed to add error E{error_code:02d}")
+                
+        except Exception as e:
+            print(f"✗ Error testing E{error_code:02d}: {str(e)}")
+    
+    print("\n=== Error Test Complete ===")
+    print("Current error history:")
+    for err in get_active_errors():
+        print(f"E{err['code']:02d} at {err['date']}")
+
+# Add this to the end of the file to run tests when script is run directly
+if __name__ == "__main__":
+    try:
+        # Run error tests
+        test_all_errors()
+        
+        # Start the server
+        run_server()
+    except KeyboardInterrupt:
+        print("\nShutting down server...")
+        sys.exit(0)
+    except Exception as e:
+        print(f"Error starting server: {str(e)}")
+        sys.exit(1)
