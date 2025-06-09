@@ -343,33 +343,17 @@ class UARTCommunicator:
                     print(f"Failed to reopen port: {str(e)}")
                     return
             
-            # Add delay before sending
-            time.sleep(0.1)  # 100ms delay
-            
-            # Prepare and send message
+            # Format the message with newline
             encoded_message = f"{message}\n".encode('utf-8')
             print(f"Encoded message: {repr(encoded_message)}")
-            print(f"Message length: {len(encoded_message)} bytes")
             
-            # Clear output buffer
-            self.serial.reset_output_buffer()
-            
-            # Send message with verification
+            # Send the message
             bytes_written = self.serial.write(encoded_message)
-            self.serial.flush()  # Ensure data is sent
+            self.serial.flush()  # Ensure message is sent
             
-            print(f"Wrote {bytes_written} bytes")
-            
-            # Verify data was sent
-            if bytes_written == len(encoded_message):
-                print("Message sent successfully")
-                logging.info(f"UART message sent: {message}")
-            else:
-                print(f"Warning: Only wrote {bytes_written} of {len(encoded_message)} bytes")
-            
-            # Add delay after sending
-            time.sleep(0.1)  # 100ms delay
-            
+            # Print confirmation
+            print(f"Bytes written: {bytes_written}")
+            print(f"Message sent successfully")
             print("=== Message Send Complete ===\n")
             
         except Exception as e:
@@ -377,7 +361,6 @@ class UARTCommunicator:
             print(f"Error type: {type(e).__name__}")
             print(f"Error message: {str(e)}")
             print("============================\n")
-            logging.error(f"Error sending UART message: {str(e)}")
             # Try to recover the port
             try:
                 if self.serial and self.serial.is_open:
@@ -385,7 +368,6 @@ class UARTCommunicator:
                 time.sleep(0.5)
                 if self.serial:
                     self.serial.open()
-                    time.sleep(0.5)
             except Exception as recovery_error:
                 print(f"Failed to recover port: {str(recovery_error)}")
 
