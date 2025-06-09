@@ -289,6 +289,13 @@ class Config:
             "group2_tank_level": 0   # سطح مخزن گروه 2
         }
         
+        # اضافه کردن متغیرهای قفل
+        self.lock_state = {
+            "mode": 0,  # 0 = باز, 1 = قفل نوع 1, 2 = قفل نوع 2
+            "code1": "1245",  # کد قفل نوع 1
+            "code2": "4127"   # کد قفل نوع 2
+        }
+        
         print("Test Configuration initialized")
 
     def schedule_gh_deactivation(self, gh_number):
@@ -494,10 +501,10 @@ def control_display_power(mode: int):
             # فعال کردن screensaver و DPMS
             subprocess.run(['xset', 's', 'on'], check=True)
             subprocess.run(['xset', '+dpms'], check=True)
-            # تنظیم timeout‌ها برای خواب رفتن بعد از 30 ثانیه
-            subprocess.run(['xset', 's', '30'], check=True)  # 30 ثانیه
-            subprocess.run(['xset', 'dpms', '30', '30', '30'], check=True)  # 30 ثانیه
-            print("Display sleep enabled after 30 seconds (eco mode)")
+            # تنظیم timeout‌ها برای خواب رفتن بعد از 5 دقیقه
+            subprocess.run(['xset', 's', '300'], check=True)  # 5 دقیقه
+            subprocess.run(['xset', 'dpms', '300', '300', '300'], check=True)  # 5 دقیقه
+            print("Display sleep enabled after 5 minutes (eco mode)")
         # در حالت sleep (mode=2) کاری انجام نمی‌دهیم
     except Exception as e:
         print(f"Error controlling display power: {str(e)}")
@@ -593,6 +600,35 @@ def send_actuator_uart(flag: int, enabled: bool):
     logging.info(f"Actuator {flag} {'enabled' if enabled else 'disabled'}")
     logging.info(f"UART message sent: {message}")
 
+def send_error_uart(error_number: int):
+    """
+    ارسال پیام خطا از طریق UART با فلگ 20
+    فرمت پیام: 20;error_number
+    مثال: 20;2 برای خطای E02
+    """
+    message = f"20;{error_number}"
+    print("\n" + "="*80)
+    print("ERROR UART MESSAGE:")
+    print("-"*80)
+    print(f"Error number: {error_number}")
+    print(f"UART Message: {message}")
+    print("-"*80)
+    print("="*80 + "\n")
+    
+    # ارسال پیام UART
+    simulate_uart_send(message)
+    
+    # اضافه کردن به تاریخچه خطاها
+    ERROR_HISTORY.append({
+        "error_number": error_number,
+        "timestamp": time.time(),
+        "error_message": ERROR_MESSAGES[error_number] if error_number < len(ERROR_MESSAGES) else "خطای نامشخص"
+    })
+    
+    # لاگ کردن
+    logging.info(f"Error {error_number} sent via UART: {message}")
+    logging.info(f"Error message: {ERROR_MESSAGES[error_number] if error_number < len(ERROR_MESSAGES) else 'خطای نامشخص'}")
+
 def handle_uart_message(flag: int, values: list):
     global last_gh1_start, last_gh2_start, config
     print(f"\n=== UART Message Received ===")
@@ -600,6 +636,38 @@ def handle_uart_message(flag: int, values: list):
     print(f"Values: {values}")
     
     try:
+        if flag == 20:  # پیام خطا
+            error_number = int(values[0])
+            print(f"\nProcessing error message (flag 20)")
+            print(f"Error number: {error_number}")
+            
+            # اضافه کردن به تاریخچه خطاها
+            ERROR_HISTORY.append({
+                "error_number": error_number,
+                "timestamp": time.time(),
+                "error_message": ERROR_MESSAGES[error_number] if error_number < len(ERROR_MESSAGES) else "خطای نامشخص"
+            })
+            
+            # به‌روزرسانی وضعیت خطا در config
+            if error_number < len(ERROR_MESSAGES):
+                error_key = f"error_{error_number:02d}"
+                config.error_states[error_key] = True
+                print(f"Updated error state for {error_key}")
+            
+            return
+
+        if flag == 7:  # پیام قفل
+            print("\nProcessing lock message (flag 7)")
+            lock_type = int(values[0])
+            if lock_type in [1, 2]:
+                print(f"Setting lock mode to {lock_type}")
+                config.lock_state["mode"] = lock_type
+                # ارسال پیام UART برای تأیید تغییر وضعیت قفل
+                simulate_uart_send(f"7;{lock_type}")
+            else:
+                print(f"Invalid lock type: {lock_type}")
+            return
+
         if flag == 50:  # Update system time
             print(f"\nReceived time update (flag 50) with values: {values}")
             if len(values) >= 6:
@@ -967,7 +1035,23 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
-            self.wfile.write(json.dumps(ERROR_HISTORY).encode())
+            
+            # تبدیل تاریخچه خطاها به فرمت مناسب برای ارسال
+            error_list = []
+            for error in ERROR_HISTORY:
+                error_list.append({
+                    "error_number": error["error_number"],
+                    "timestamp": error["timestamp"],
+                    "error_message": error["error_message"],
+                    "formatted_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(error["timestamp"]))
+                })
+            
+            data = {
+                "errors": error_list,
+                "current_errors": {k: v for k, v in config.error_states.items() if v}
+            }
+            
+            self.wfile.write(json.dumps(data).encode())
             return
 
         elif self.path == '/getservicedata':
@@ -987,6 +1071,20 @@ class RequestHandler(BaseHTTPRequestHandler):
             print(f"\nSending response: {response_data}")
             
             self.wfile.write(response_data.encode())
+            return
+
+        elif self.path == '/getlockstatus':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            
+            lock_data = {
+                "mode": config.lock_state["mode"],
+                "is_locked": config.lock_state["mode"] > 0
+            }
+            
+            self.wfile.write(json.dumps(lock_data).encode())
             return
 
         else:
@@ -1519,7 +1617,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
 
             elif self.path == '/clearerrors':
+                # پاک کردن تاریخچه خطاها
                 ERROR_HISTORY.clear()
+                
+                # پاک کردن وضعیت خطاها در config
+                config.error_states = {k: False for k in config.error_states}
+                
+                # ارسال پیام UART برای پاک کردن خطاها
+                send_error_uart(0)  # ارسال خطای 0 برای پاک کردن همه خطاها
+                
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
@@ -1538,6 +1644,49 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
                 self.wfile.write(json.dumps({'success': True}).encode())
+                return
+
+            elif self.path == '/unlock':
+                print("\n=== Processing Unlock Request ===")
+                code = params.get('code', '')
+                current_mode = config.lock_state["mode"]
+                
+                if current_mode == 0:
+                    print("System is not locked")
+                    self.send_response(400)
+                    self.send_header('Content-type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        'success': False,
+                        'error': 'System is not locked'
+                    }).encode())
+                    return
+                
+                correct_code = config.lock_state["code1"] if current_mode == 1 else config.lock_state["code2"]
+                if code == correct_code:
+                    print(f"Correct code entered for mode {current_mode}")
+                    config.lock_state["mode"] = 0
+                    # ارسال پیام UART برای تأیید باز شدن قفل
+                    simulate_uart_send("7;0")
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        'success': True,
+                        'message': 'System unlocked successfully'
+                    }).encode())
+                else:
+                    print(f"Invalid code entered for mode {current_mode}")
+                    self.send_response(400)
+                    self.send_header('Content-type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        'success': False,
+                        'error': 'Invalid code'
+                    }).encode())
                 return
 
             self.send_response(200)
