@@ -66,24 +66,50 @@ class UARTCommunicator:
                 self.serial.close()
                 time.sleep(0.5)
             
-            self.serial = serial.Serial(
-                port=self.port,
-                baudrate=self.baudrate,
-                bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE,
-                timeout=1,
-                write_timeout=1  # Add write timeout
-            )
+            # Try to open port with explicit settings
+            self.serial = serial.Serial()
+            self.serial.port = self.port
+            self.serial.baudrate = self.baudrate
+            self.serial.bytesize = serial.EIGHTBITS
+            self.serial.parity = serial.PARITY_NONE
+            self.serial.stopbits = serial.STOPBITS_ONE
+            self.serial.timeout = 1
+            self.serial.write_timeout = 1
+            self.serial.xonxoff = False
+            self.serial.rtscts = False
+            self.serial.dsrdtr = False
+            
+            print("Opening port with settings:")
+            print(f"- Port: {self.serial.port}")
+            print(f"- Baudrate: {self.serial.baudrate}")
+            print(f"- Bytesize: {self.serial.bytesize}")
+            print(f"- Parity: {self.serial.parity}")
+            print(f"- Stopbits: {self.serial.stopbits}")
+            print(f"- Timeout: {self.serial.timeout}")
+            print(f"- Write timeout: {self.serial.write_timeout}")
+            
+            # Open port
+            self.serial.open()
+            
+            # Verify port is open
+            if not self.serial.is_open:
+                raise serial.SerialException("Failed to open port")
             
             # Reset buffers
             self.serial.reset_input_buffer()
             self.serial.reset_output_buffer()
             
-            print(f"Serial port opened successfully: {self.serial.is_open}")
+            print(f"\nSerial port opened successfully: {self.serial.is_open}")
             print(f"Port settings: {self.serial.get_settings()}")
             print(f"Input buffer size: {self.serial.in_waiting}")
             print(f"Output buffer size: {self.serial.out_waiting}")
+            
+            # Test write
+            test_message = "TEST\n"
+            print(f"\nTesting port with message: {test_message}")
+            bytes_written = self.serial.write(test_message.encode('utf-8'))
+            self.serial.flush()
+            print(f"Test write: {bytes_written} bytes")
             
             self.running = True
             self.thread = threading.Thread(target=self._read_loop)
@@ -303,9 +329,19 @@ class UARTCommunicator:
             print(f"\n=== Sending UART Message ===")
             print(f"Message: {message}")
             
-            if not self.serial or not self.serial.is_open:
-                print("!!! Error: Serial port not initialized or not open !!!")
+            if not self.serial:
+                print("!!! Error: Serial port not initialized !!!")
                 return
+                
+            if not self.serial.is_open:
+                print("!!! Error: Serial port is not open !!!")
+                print("Attempting to reopen port...")
+                try:
+                    self.serial.open()
+                    print(f"Port reopened: {self.serial.is_open}")
+                except Exception as e:
+                    print(f"Failed to reopen port: {str(e)}")
+                    return
             
             # Add delay before sending
             time.sleep(0.1)  # 100ms delay
@@ -313,13 +349,23 @@ class UARTCommunicator:
             # Prepare and send message
             encoded_message = f"{message}\n".encode('utf-8')
             print(f"Encoded message: {repr(encoded_message)}")
+            print(f"Message length: {len(encoded_message)} bytes")
             
-            # Send message
+            # Clear output buffer
+            self.serial.reset_output_buffer()
+            
+            # Send message with verification
             bytes_written = self.serial.write(encoded_message)
             self.serial.flush()  # Ensure data is sent
             
             print(f"Wrote {bytes_written} bytes")
-            logging.info(f"UART message sent: {message}")
+            
+            # Verify data was sent
+            if bytes_written == len(encoded_message):
+                print("Message sent successfully")
+                logging.info(f"UART message sent: {message}")
+            else:
+                print(f"Warning: Only wrote {bytes_written} of {len(encoded_message)} bytes")
             
             # Add delay after sending
             time.sleep(0.1)  # 100ms delay
@@ -332,6 +378,16 @@ class UARTCommunicator:
             print(f"Error message: {str(e)}")
             print("============================\n")
             logging.error(f"Error sending UART message: {str(e)}")
+            # Try to recover the port
+            try:
+                if self.serial and self.serial.is_open:
+                    self.serial.close()
+                time.sleep(0.5)
+                if self.serial:
+                    self.serial.open()
+                    time.sleep(0.5)
+            except Exception as recovery_error:
+                print(f"Failed to recover port: {str(recovery_error)}")
 
     def send_gh_config(self, gh_id: int, config: Dict[str, Any]):
         """Send group head configuration (flag 1 or 2) - NO pre-infusion or backflush here"""
