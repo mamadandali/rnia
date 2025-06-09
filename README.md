@@ -46,10 +46,12 @@ def remove_error(error_code: int):
         logging.info(f"Error removed: E{error_code:02d}")
 
 def clear_all_errors():
-    """Clear all error history"""
+    """Clear all error history and reset counter"""
+    global error_counter
     with error_lock:
         error_history.clear()
-        logging.info("All errors cleared")
+        error_counter = 0  # Reset the counter when clearing errors
+        logging.info("All errors cleared and counter reset")
 
 def get_active_errors() -> List[Dict[str, Any]]:
     """Get list of error records"""
@@ -1589,12 +1591,17 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
 
             elif self.path == '/clearerrors':
-                clear_all_errors()
+                print("\n=== Clearing All Errors ===")
+                clear_all_errors()  # This will clear history and reset counter
+                print("All errors cleared and counter reset")
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
-                self.wfile.write(json.dumps({'success': True}).encode())
+                self.wfile.write(json.dumps({
+                    'success': True,
+                    'message': 'All errors cleared'
+                }).encode())
                 return
 
             # Add new endpoint for service mode (flag 21)
