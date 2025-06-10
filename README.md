@@ -8,8 +8,7 @@ import time
 import random
 from urllib.parse import parse_qs
 from datetime import datetime
-import serial  # اضافه کردن کتابخانه pyserial
-import subprocess  # اضافه کردن کتابخانه subprocess
+import serial  # اضافه کردن کتابخانه serial برای ارتباط UART
 
 # Global state variables
 main_boiler_state = 0
@@ -35,7 +34,10 @@ logger = logging.getLogger(__name__)
 # Add filter to ignore /getdata requests
 class GetDataFilter(logging.Filter):
     def filter(self, record):
-        return not ('GET /getdata' in record.getMessage())
+        message = record.getMessage()
+        # فیلتر کردن درخواست‌های مکرر
+        ignored_paths = ['GET /getdata', 'GET /getlockstatus', 'GET /getmainstatus']
+        return not any(path in message for path in ignored_paths)
 
 # Apply filter to all handlers
 for handler in logger.handlers:
@@ -137,7 +139,6 @@ class UARTCommunicator:
 # Create UART communicator instance
 uart = UARTCommunicator()
 
-# Replace simulate_uart_send with uart.send_string
 def simulate_uart_send(s: str):
     """Send UART message using the real UART port"""
     uart.send_string(s)
@@ -385,11 +386,7 @@ def send_gh_uart(flag, cfg, send_preinfusion=False, send_backflush=False):
     print(f"\nSending GH{flag} UART message...")
     # Get all values, using most recent ones
     temp = int(round(cfg['temperature'] * 10))  # Multiply by 10 as requested
-    # استفاده از مقدار volume از uart_data اگر موجود باشد
-    if flag == 1:
-        ext_vol = int(round(config.uart_data['gh1'].get('volume', cfg['extraction_volume'])))
-    else:  # flag == 2
-        ext_vol = int(round(config.uart_data['gh2'].get('volume', cfg['extraction_volume'])))
+    ext_vol = int(round(cfg['extraction_volume']))
     ext_time = int(round(cfg['extraction_time']))
     purge = int(round(cfg.get('purge', 0)))
     
@@ -488,33 +485,6 @@ def reset_boiler_discharge():
     send_system_status_uart()  # Send update after reset
     print("================================\n")
 
-def control_display_power(mode: int):
-    """کنترل وضعیت صفحه نمایش بر اساس حالت سیستم
-    mode: 0=عادی (غیرفعال کردن کامل خواب), 1=eco (فعال کردن خواب بعد از مدتی), 2=sleep (بدون تغییر)
-    """
-    try:
-        if mode == 0:  # حالت عادی - غیرفعال کردن کامل خواب
-            # غیرفعال کردن کامل screensaver و DPMS
-            subprocess.run(['xset', 's', 'off'], check=True)
-            subprocess.run(['xset', '-dpms'], check=True)
-            # تنظیم timeout‌ها به صفر برای اطمینان از عدم خواب رفتن
-            subprocess.run(['xset', 's', '0'], check=True)
-            subprocess.run(['xset', 'dpms', '0', '0', '0'], check=True)
-            print("Display sleep completely disabled (normal mode)")
-        elif mode == 1:  # حالت eco - فعال کردن خواب بعد از مدتی
-            # فعال کردن screensaver و DPMS
-            subprocess.run(['xset', 's', 'on'], check=True)
-            subprocess.run(['xset', '+dpms'], check=True)
-            # تنظیم timeout‌ها برای خواب رفتن بعد از 5 دقیقه
-            subprocess.run(['xset', 's', '300'], check=True)  # 5 دقیقه
-            subprocess.run(['xset', 'dpms', '300', '300', '300'], check=True)  # 5 دقیقه
-            print("Display sleep enabled after 5 minutes (eco mode)")
-        # در حالت sleep (mode=2) کاری انجام نمی‌دهیم
-    except Exception as e:
-        print(f"Error controlling display power: {str(e)}")
-        print("Please make sure x11-xserver-utils is installed:")
-        print("sudo apt-get install x11-xserver-utils")
-
 def update_system_status(mode=None, light=None, cup=None, month=None, day=None, hour=None, minute=None):
     """Update system status and send UART message if any value changes"""
     global mode_state, boiler_discharge, barista_light, cup_warmer
@@ -525,7 +495,6 @@ def update_system_status(mode=None, light=None, cup=None, month=None, day=None, 
     if mode is not None and mode != mode_state:
         print(f"Mode changing from {mode_state} to {mode}")
         mode_state = mode
-        control_display_power(mode)  # فراخوانی تابع کنترل صفحه نمایش
         changed = True
     if light is not None and light != barista_light:
         print(f"Barista light changing from {barista_light} to {light}")
@@ -556,9 +525,6 @@ def send_service_uart(enabled: bool):
         print(f"DATA: {s}")
         print("-"*80)
         print("="*80 + "\n")
-        
-        # ارسال پیام از طریق UART
-        uart.send_string(s)
         
         # Log to file and force flush
         logging.info(f"SERVICE MODE UART: {s}")
@@ -614,16 +580,53 @@ def handle_uart_message(flag: int, values: list):
         if flag == 7:  # پیام قفل
             print("\nProcessing lock message (flag 7)")
             lock_type = int(values[0])
+            lock_code = str(values[1]) if len(values) > 1 else None
+            
             if lock_type in [1, 2]:
                 print(f"Setting lock mode to {lock_type}")
                 config.lock_state["mode"] = lock_type
-                # ارسال پیام UART برای تأیید تغییر وضعیت قفل
-                simulate_uart_send(f"7;{lock_type}")
+                if lock_code:
+                    # به‌روزرسانی کد قفل
+                    if lock_type == 1:
+                        config.lock_state["code1"] = lock_code
+                    else:
+                        config.lock_state["code2"] = lock_code
+                    print(f"Updated lock code for type {lock_type} to {lock_code}")
             else:
                 print(f"Invalid lock type: {lock_type}")
             return
-
-        if flag == 50:  # Update system time
+            
+        elif flag == 19:  # تنظیم تاریخ و زمان
+            print(f"\nReceived date/time update (flag 19) with values: {values}")
+            if len(values) >= 6:
+                year = 2000 + int(values[0])  # Convert 2-digit year to 4-digit
+                month, day, hour, minute, second = [int(x) for x in values[1:6]]
+                config.current_time.update({
+                    "year": year,
+                    "month": month,
+                    "day": day,
+                    "hour": hour,
+                    "minute": minute,
+                    "second": second
+                })
+                print(f"Updated system time to: {year}/{month}/{day} {hour}:{minute}:{second}")
+            return
+            
+        elif flag == 21:  # حالت سرویس
+            print("\nProcessing service mode message (flag 21)")
+            enabled = bool(int(values[0]))
+            print(f"Service mode {'enabled' if enabled else 'disabled'}")
+            # به‌روزرسانی وضعیت در config اگر نیاز باشد
+            return
+            
+        elif flag >= 22 and flag <= 44:  # کنترل actuator ها
+            print(f"\nProcessing actuator message (flag {flag})")
+            enabled = bool(int(values[0]))
+            print(f"Actuator {flag} {'enabled' if enabled else 'disabled'}")
+            # به‌روزرسانی وضعیت actuator در config اگر نیاز باشد
+            return
+            
+        elif flag == 50:  # Update system time
             print(f"\nReceived time update (flag 50) with values: {values}")
             if len(values) >= 6:
                 year, month, day, hour, minute, second = [int(x) for x in values[:6]]
@@ -712,9 +715,8 @@ def handle_uart_message(flag: int, values: list):
             })
             config.uart_data['gh1'].update({
                 "temperature": values[0],  # ذخیره مقدار خام
-                "volume": values[1],  # تغییر از extraction_volume به volume
-                "time": values[2],  # مقدار زمان
-                "purge": values[3]  # مقدار purge
+                "pressure": values[1] / 10,  # تبدیل به بار
+                "flow": values[2]  # مقدار جریان
             })
             print(f"\nUpdated GH1 configuration:")
             print(f"Temperature: {temp_value}°C")
@@ -733,9 +735,8 @@ def handle_uart_message(flag: int, values: list):
             })
             config.uart_data['gh2'].update({
                 "temperature": values[0],  # ذخیره مقدار خام
-                "volume": values[1],  # تغییر از extraction_volume به volume
-                "time": values[2],  # مقدار زمان
-                "purge": values[3]  # مقدار purge
+                "pressure": values[1] / 10,  # تبدیل به بار
+                "flow": values[2]  # مقدار جریان
             })
             print(f"\nUpdated GH2 configuration:")
             print(f"Temperature: {temp_value}°C")
@@ -804,6 +805,37 @@ def handle_uart_message(flag: int, values: list):
                 print("Received GH2 extraction stop (14;0), setting HGP2ACTIVE=0")
                 config.HGP2ACTIVE = 0
                 config.gh2_extraction_in_progress = False
+        elif flag == 11:  # GH1 backflush
+            print(f"\nProcessing GH1 backflush (flag 11)")
+            enabled = bool(int(values[0]))
+            config.gh1_config['backflush'] = enabled
+            print(f"GH1 backflush {'enabled' if enabled else 'disabled'}")
+        elif flag == 12:  # GH2 backflush
+            print(f"\nProcessing GH2 backflush (flag 12)")
+            enabled = bool(int(values[0]))
+            config.gh2_config['backflush'] = enabled
+            print(f"GH2 backflush {'enabled' if enabled else 'disabled'}")
+        elif flag == 15:  # GH1 pre-infusion
+            print(f"\nProcessing GH1 pre-infusion (flag 15)")
+            preinf_time = int(values[0])
+            config.gh1_config['pre_infusion'] = {
+                "enabled": preinf_time > 0,
+                "time": preinf_time
+            }
+            print(f"GH1 pre-infusion time set to {preinf_time}s")
+        elif flag == 16:  # GH2 pre-infusion
+            print(f"\nProcessing GH2 pre-infusion (flag 16)")
+            preinf_time = int(values[0])
+            config.gh2_config['pre_infusion'] = {
+                "enabled": preinf_time > 0,
+                "time": preinf_time
+            }
+            print(f"GH2 pre-infusion time set to {preinf_time}s")
+        elif flag == 17:  # Boiler discharge
+            print(f"\nProcessing boiler discharge (flag 17)")
+            discharge_type = int(values[0])
+            discharge_map = {0: "none", 1: "drain_refill", 2: "drain_shutdown"}
+            print(f"Boiler discharge set to {discharge_map.get(discharge_type, 'unknown')}")
     except Exception as e:
         print(f"Error handling UART message: {str(e)}")
         logging.error(f"Error handling UART message: {str(e)}")
@@ -820,7 +852,21 @@ class RequestHandler(BaseHTTPRequestHandler):
             print(f"\n{self.address_string()} - {format % args}\n")
     
     def do_GET(self):
-        if self.path == '/getmainstatus':
+        if self.path == '/getlockstatus':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            
+            lock_data = {
+                "mode": config.lock_state["mode"],
+                "is_locked": config.lock_state["mode"] > 0
+            }
+            
+            self.wfile.write(json.dumps(lock_data).encode())
+            return
+            
+        elif self.path == '/getmainstatus':
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
@@ -1014,20 +1060,6 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(response_data.encode())
             return
 
-        elif self.path == '/getlockstatus':
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            
-            lock_data = {
-                "mode": config.lock_state["mode"],
-                "is_locked": config.lock_state["mode"] > 0
-            }
-            
-            self.wfile.write(json.dumps(lock_data).encode())
-            return
-
         else:
             self.send_response(404)
             self.send_header('Content-type', 'text/html')
@@ -1050,7 +1082,48 @@ class RequestHandler(BaseHTTPRequestHandler):
             post_data = self.rfile.read(content_length).decode('utf-8')
             params = json.loads(post_data)
             
-            if self.path == '/simulate_uart':
+            if self.path == '/unlock':
+                print("\n=== Processing Unlock Request ===")
+                code = params.get('code', '')
+                current_mode = config.lock_state["mode"]
+                
+                if current_mode == 0:
+                    print("System is not locked")
+                    self.send_response(400)
+                    self.send_header('Content-type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        'success': False,
+                        'error': 'System is not locked'
+                    }).encode())
+                    return
+                
+                correct_code = config.lock_state["code1"] if current_mode == 1 else config.lock_state["code2"]
+                if code == correct_code:
+                    print(f"Correct code entered for mode {current_mode}")
+                    config.lock_state["mode"] = 0
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        'success': True,
+                        'message': 'System unlocked successfully'
+                    }).encode())
+                else:
+                    print(f"Invalid code entered for mode {current_mode}")
+                    self.send_response(400)
+                    self.send_header('Content-type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        'success': False,
+                        'error': 'Invalid code'
+                    }).encode())
+                return
+                
+            elif self.path == '/simulate_uart':
                 print("\n=== Processing Simulated UART Message ===")
                 message = params.get('message', '')
                 print(f"Received UART message: {message}")
@@ -1398,15 +1471,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 
                 if gh_id == 'gh1':
                     print("\n=== UPDATING GH1 CONFIG ===")
-                    # Handle null volume by using existing value
-                    volume = new_config.get('volume')
-                    if volume is None:
-                        volume = config.gh1_config['extraction_volume']
-                        print(f"Using existing volume value: {volume}")
-                    
+                    # به‌روزرسانی تنظیمات با مقادیر جدید
                     config.gh1_config.update({
                         "temperature": float(new_config.get('temperature', config.gh1_config['temperature'])),
-                        "extraction_volume": int(volume),
+                        "extraction_volume": int(new_config.get('extraction_volume', config.gh1_config['extraction_volume'])),
                         "extraction_time": int(new_config.get('extraction_time', config.gh1_config['extraction_time'])),
                         "pre_infusion": preinf,
                         "purge": int(new_config.get('purge', config.gh1_config['purge'])),
@@ -1426,15 +1494,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 
                 elif gh_id == 'gh2':
                     print("\n=== UPDATING GH2 CONFIG ===")
-                    # Handle null volume by using existing value
-                    volume = new_config.get('volume')
-                    if volume is None:
-                        volume = config.gh2_config['extraction_volume']
-                        print(f"Using existing volume value: {volume}")
-                    
+                    # به‌روزرسانی تنظیمات با مقادیر جدید
                     config.gh2_config.update({
                         "temperature": float(new_config.get('temperature', config.gh2_config['temperature'])),
-                        "extraction_volume": int(volume),
+                        "extraction_volume": int(new_config.get('extraction_volume', config.gh2_config['extraction_volume'])),
                         "extraction_time": int(new_config.get('extraction_time', config.gh2_config['extraction_time'])),
                         "pre_infusion": preinf,
                         "purge": int(new_config.get('purge', config.gh2_config['purge'])),
@@ -1577,49 +1640,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
                 self.wfile.write(json.dumps({'success': True}).encode())
-                return
-
-            elif self.path == '/unlock':
-                print("\n=== Processing Unlock Request ===")
-                code = params.get('code', '')
-                current_mode = config.lock_state["mode"]
-                
-                if current_mode == 0:
-                    print("System is not locked")
-                    self.send_response(400)
-                    self.send_header('Content-type', 'application/json')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({
-                        'success': False,
-                        'error': 'System is not locked'
-                    }).encode())
-                    return
-                
-                correct_code = config.lock_state["code1"] if current_mode == 1 else config.lock_state["code2"]
-                if code == correct_code:
-                    print(f"Correct code entered for mode {current_mode}")
-                    config.lock_state["mode"] = 0
-                    # ارسال پیام UART برای تأیید باز شدن قفل
-                    simulate_uart_send("7;0")
-                    self.send_response(200)
-                    self.send_header('Content-type', 'application/json')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({
-                        'success': True,
-                        'message': 'System unlocked successfully'
-                    }).encode())
-                else:
-                    print(f"Invalid code entered for mode {current_mode}")
-                    self.send_response(400)
-                    self.send_header('Content-type', 'application/json')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({
-                        'success': False,
-                        'error': 'Invalid code'
-                    }).encode())
                 return
 
             self.send_response(200)
